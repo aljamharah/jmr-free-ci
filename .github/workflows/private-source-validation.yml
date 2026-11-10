@@ -6,6 +6,8 @@ on:
 permissions:
   contents: read
 
+# The fine-grained token must have Contents: Read-only on aljamharah/aljamharah.
+
 concurrency:
   group: jmr-private-source-validation
   cancel-in-progress: true
