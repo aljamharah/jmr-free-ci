@@ -67,6 +67,12 @@ jobs:
         working-directory: private-source
         run: npm test
 
+      - name: Build and validate published poet biographies
+        working-directory: private-source
+        run: |
+          python scripts/build_jmr_poets_index.py
+          python -m unittest tests/test_jmr_poets_index.py
+
       - name: Run JMR retrieval/runtime smoke tests
         working-directory: private-source
         run: node scripts/test_jmr_runtime.mjs
