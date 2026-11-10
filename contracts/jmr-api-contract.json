@@ -1,0 +1,21 @@
+{
+  "contract_version": "1.0",
+  "project": "Al-Jamhara / JMR AI",
+  "canonical_repository": "aljamharah/aljamharah",
+  "visibility_boundary": {
+    "canonical_source_is_private": true,
+    "public_harness_contains_application_source": false,
+    "public_harness_contains_secrets": false,
+    "public_harness_deploys_production": false
+  },
+  "response": {
+    "required_fields": ["answer"],
+    "optional_fields": ["mode", "answer_kind", "sources", "knowledge_matches", "bibliography_matches", "quran_verification", "search_status"],
+    "answer_type": "string"
+  },
+  "quran_safety": {
+    "must_verify_before_attribution": true,
+    "must_not_attribute_verse_as_poetry": true,
+    "must_fail_closed_when_canonical_corpus_unavailable": true
+  }
+}
