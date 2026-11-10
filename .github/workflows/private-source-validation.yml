@@ -102,3 +102,50 @@ jobs:
       - name: Run Durable Object concurrency and expiry tests
         working-directory: private-source/workers/jmr-ratelimit-do
         run: npm test
+
+      - name: Check deployed JMR Preview page and API guard
+        env:
+          PREVIEW_URL: https://jmr-preview-rate-limit-2026.aljamharah.pages.dev
+        run: |
+          set -euo pipefail
+          page_status="$(curl --silent --show-error --location --max-time 25 \
+            --retry 5 --retry-all-errors --retry-delay 5 \
+            --output /tmp/jmr-preview.html --write-out '%{http_code}' \
+            "$PREVIEW_URL/jmr.html")"
+          echo "Preview chat page HTTP status: $page_status"
+          test "$page_status" = "200"
+          grep -q 'id="askForm"' /tmp/jmr-preview.html
+          api_status="$(curl --silent --show-error --location --max-time 25 \
+            --output /tmp/jmr-api-get.json --write-out '%{http_code}' \
+            "$PREVIEW_URL/api/jmr")"
+          echo "GET /api/jmr status: $api_status"
+          test "$api_status" = "405"
+          echo "Preview page and API method guard verified."
+
+      - name: Send one real language question to JMR Preview
+        working-directory: private-source
+        env:
+          JMR_PREVIEW_URL: https://jmr-preview-rate-limit-2026.aljamharah.pages.dev
+        run: |
+          node scripts/evaluate_jmr_preview.mjs --limit 1 --out /tmp/jmr-live-smoke-report.json
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const report = JSON.parse(readFileSync("/tmp/jmr-live-smoke-report.json", "utf8"));
+          const result = report.results?.[0];
+          if (!result?.ok) {
+            console.error(JSON.stringify({
+              id: result?.id,
+              http_status: result?.http_status,
+              error: result?.error,
+              answer: result?.answer
+            }, null, 2));
+            process.exit(1);
+          }
+          console.log(JSON.stringify({
+            id: result.id,
+            http_status: result.http_status,
+            answer_length: result.answer.length,
+            source_count: result.sources.length,
+            answer_kind: result.answer_kind
+          }, null, 2));
+          NODE
