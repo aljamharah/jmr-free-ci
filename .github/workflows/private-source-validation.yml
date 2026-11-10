@@ -149,3 +149,65 @@ jobs:
             answer_kind: result.answer_kind
           }, null, 2));
           NODE
+
+      - name: Verify live poet retrieval and Quran isolation
+        env:
+          JMR_PREVIEW_URL: https://jmr-preview-rate-limit-2026.aljamharah.pages.dev
+        run: |
+          node --input-type=module <<'NODE'
+          const endpoint = new URL("/api/jmr", process.env.JMR_PREVIEW_URL).href;
+          async function ask(message) {
+            const response = await fetch(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ message, conversation: [] }),
+              signal: AbortSignal.timeout(90000)
+            });
+            const payload = await response.json();
+            if (!response.ok || typeof payload.answer !== "string" || !payload.answer.trim()) {
+              throw new Error("Live JMR request failed: HTTP " + response.status + " " + JSON.stringify(payload));
+            }
+            return payload;
+          }
+
+          const poet = await ask("من هو أبو الطيب المتنبي؟");
+          const biography = (poet.poet_matches || []).find(item => item.id === "al-mutanabbi");
+          if (!biography) {
+            throw new Error("Live poet retrieval did not return al-mutanabbi: " + JSON.stringify(poet.poet_matches));
+          }
+          if (!(poet.sources || []).some(source =>
+            source.url === "https://www.arab-ency.com.sy/details/7538" ||
+            source.url === "https://uqu.edu.sa/App/Poetry/Poets/365"
+          )) {
+            throw new Error("The live poet response did not include its registered biography references.");
+          }
+          console.log(JSON.stringify({
+            check: "poet_biography",
+            http_status: 200,
+            poet_id: biography.id,
+            era: biography.era,
+            sources: (poet.sources || []).length
+          }));
+
+          await new Promise(resolve => setTimeout(resolve, 5200));
+          const quran = await ask("ما مصدر هذه الآية القرآنية: ربنا آتنا من لدنك رحمة؟ وهل ترتبط بالمتنبي؟");
+          if (quran.quran_verification?.status !== "verified") {
+            throw new Error("The Quran-sensitive live request was not verified: " + JSON.stringify(quran.quran_verification));
+          }
+          if ((quran.poet_matches || []).length !== 0) {
+            throw new Error("Poet biographies leaked into a Quran-sensitive response: " + JSON.stringify(quran.poet_matches));
+          }
+          if ((quran.sources || []).some(source =>
+            source.url === "https://www.arab-ency.com.sy/details/7538" ||
+            source.url === "https://uqu.edu.sa/App/Poetry/Poets/365"
+          )) {
+            throw new Error("Poet references leaked into the Quran-sensitive source list.");
+          }
+          console.log(JSON.stringify({
+            check: "quran_poet_isolation",
+            http_status: 200,
+            verification: quran.quran_verification.status,
+            poet_matches: 0,
+            answer_length: quran.answer.length
+          }));
+          NODE
