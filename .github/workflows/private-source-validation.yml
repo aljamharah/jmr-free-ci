@@ -145,7 +145,34 @@ jobs:
             "$PREVIEW_URL/poets.html?id=al-mutanabbi")"
           echo "Poet directory page HTTP status: $poets_page_status"
           test "$poets_page_status" = "200"
-          echo "Preview page, poet index and API method guard verified."
+          node --input-type=module <<'NODE'
+          const endpoint = new URL("/api/jmr", process.env.PREVIEW_URL).href;
+          const response = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: "أعرب: إنما يخشى الله من عباده العلماء، وهل نسبها المتنبي؟",
+              conversation: []
+            }),
+            signal: AbortSignal.timeout(30000)
+          });
+          const payload = await response.json();
+          if (response.status !== 200 ||
+              payload.mode !== "curated_exact_answer" ||
+              payload.answer_kind !== "quranic_verse" ||
+              payload.quran_verification?.status !== "verified" ||
+              !payload.answer.includes("سورة فاطر، الآية 28") ||
+              !payload.answer.includes("ليست بيتاً شعرياً") ||
+              (payload.poet_matches || []).length !== 0 ||
+              (payload.sources || []).some(source =>
+                source.url === "https://www.arab-ency.com.sy/details/7538" ||
+                source.url === "https://uqu.edu.sa/App/Poetry/Poets/365"
+              )) {
+            throw new Error("Live reviewed Quran path failed its source/isolation checks: " + JSON.stringify(payload));
+          }
+          console.log("Live reviewed Quran answer verified; no poet match/source leaked; no model call required.");
+          NODE
+          echo "Preview page, poet index, reviewed Quran path and API method guard verified."
 
       - name: Send one real language question to JMR Preview
         working-directory: private-source
