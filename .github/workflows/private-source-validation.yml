@@ -36,7 +36,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: jmr-ai-foundation
+          ref: jmr/preview-rate-limit-2026-11-10
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: private-source
           fetch-depth: 1
@@ -82,3 +82,15 @@ jobs:
       - name: Run JMR API mock tests
         working-directory: private-source
         run: node scripts/test_jmr_api.mjs
+
+      - name: Run Preview rate-limit unit tests
+        working-directory: private-source
+        run: node --test tests/rate-limit.test.js
+
+      - name: Install Durable Object test dependencies
+        working-directory: private-source/workers/jmr-ratelimit-do
+        run: npm install --no-audit --no-fund
+
+      - name: Run Durable Object concurrency and expiry tests
+        working-directory: private-source/workers/jmr-ratelimit-do
+        run: npm test
