@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_semantic_live_checks:
+        description: "Send two real model questions to verify poet retrieval and Quran isolation; requires available Workers AI quota."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -120,7 +126,26 @@ jobs:
             "$PREVIEW_URL/api/jmr")"
           echo "GET /api/jmr status: $api_status"
           test "$api_status" = "405"
-          echo "Preview page and API method guard verified."
+          data_status="$(curl --silent --show-error --location --max-time 25 \
+            --output /tmp/jmr-poets-index.json --write-out '%{http_code}' \
+            "$PREVIEW_URL/content/poets/index.json")"
+          echo "Poet index HTTP status: $data_status"
+          test "$data_status" = "200"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const index = JSON.parse(readFileSync("/tmp/jmr-poets-index.json", "utf8"));
+          if (!Array.isArray(index.records) || index.records.length !== 11 ||
+              !index.records.some(record => record.id === "al-mutanabbi")) {
+            throw new Error("The live Preview poet index is missing required published records.");
+          }
+          console.log("Preview poet index verified: " + index.records.length + " published records.");
+          NODE
+          poets_page_status="$(curl --silent --show-error --location --max-time 25 \
+            --output /tmp/jmr-poets.html --write-out '%{http_code}' \
+            "$PREVIEW_URL/poets.html?id=al-mutanabbi")"
+          echo "Poet directory page HTTP status: $poets_page_status"
+          test "$poets_page_status" = "200"
+          echo "Preview page, poet index and API method guard verified."
 
       - name: Send one real language question to JMR Preview
         working-directory: private-source
@@ -151,6 +176,7 @@ jobs:
           NODE
 
       - name: Verify live poet retrieval and Quran isolation
+        if: github.event_name == 'workflow_dispatch' && inputs.run_semantic_live_checks
         env:
           JMR_PREVIEW_URL: https://jmr-preview-rate-limit-2026.aljamharah.pages.dev
         run: |
