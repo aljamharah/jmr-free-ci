@@ -97,7 +97,7 @@ jobs:
 
       - name: Install Durable Object test dependencies
         working-directory: private-source/workers/jmr-ratelimit-do
-        run: npm install --no-audit --no-fund
+        run: npm install --no-audit --no-fund --legacy-peer-deps --package-lock=false
 
       - name: Run Durable Object concurrency and expiry tests
         working-directory: private-source/workers/jmr-ratelimit-do
