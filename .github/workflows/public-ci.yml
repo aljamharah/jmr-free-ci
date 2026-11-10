@@ -1,0 +1,29 @@
+name: JMR Free CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jmr-free-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate public JMR contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out public test harness
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run public contract tests
+        run: npm test
