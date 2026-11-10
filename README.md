@@ -20,7 +20,7 @@ The private repository remains the single source of truth. Any future integratio
 
 ## Manual validation of the canonical private source
 
-The separate workflow `.github/workflows/private-source-validation.yml` is **manual only** and runs only when the owner `aljamharah` dispatches it from the default `main` branch. It checks out the private repository's `jmr-ai-foundation` branch into the ephemeral hosted runner, runs the real validation suite there, and does not copy the source into this public repository or upload it as an artifact.
+The separate workflow `.github/workflows/private-source-validation.yml` is **manual only** and runs only when the owner `aljamharah` dispatches it from the default `main` branch. It checks out the private repository's isolated Preview integration branch `jmr/preview-rate-limit-2026-11-10` into the ephemeral hosted runner, runs the foundation, Quran, API, rate-limit and Durable Object tests there, and does not copy the source into this public repository or upload it as an artifact.
 
 ### One-time, no-cost setup
 
@@ -30,7 +30,7 @@ The separate workflow `.github/workflows/private-source-validation.yml` is **man
 4. Grant **Contents: Read-only**. No write permission is needed.
 5. In this public repository, open **Settings → Secrets and variables → Actions → New repository secret**.
 6. Name it `JMR_PRIVATE_REPO_READ_TOKEN` and paste the token value. Never put the token in a file, issue, commit, or chat.
-7. Open **Actions → Validate private JMR source → Run workflow**.
+7. Open **Actions → Validate private JMR source → Run workflow**. The workflow tests the isolated Preview integration branch; it does not deploy Cloudflare or change Production.
 
 Security boundary: this privileged workflow has no `push` or `pull_request` trigger. Do not add those triggers. The token is supplied only to the checkout action, credential persistence is disabled, the workflow is limited to the repository owner, and it has read-only repository permissions.
 
