@@ -20,7 +20,7 @@ The private repository remains the single source of truth. Any future integratio
 
 ## Trusted-owner validation of the canonical private source
 
-The separate workflow `.github/workflows/private-source-validation.yml` runs when the owner `aljamharah` pushes to the default `main` branch, or manually when the owner dispatches it there. It checks out the private repository's isolated Preview integration branch `jmr/preview-rate-limit-2026-11-10` into the ephemeral hosted runner, runs the foundation, Quran, API, rate-limit and Durable Object tests there, and does not copy the source into this public repository or upload it as an artifact.
+The separate workflow `.github/workflows/private-source-validation.yml` runs when the owner `aljamharah` pushes to the default `main` branch, or manually when the owner dispatches it there. It checks out the private repository's isolated Preview integration branch `jmr/preview-rate-limit-2026-11-10` into the ephemeral hosted runner, runs the foundation, Quran, API, rate-limit and Durable Object tests there, checks the deployed Preview page and public poet index, performs a no-model greeting smoke request, and does not copy the source into this public repository or upload it as an artifact.
 
 ### One-time, no-cost setup
 
@@ -36,3 +36,8 @@ Security boundary: this privileged workflow has no `pull_request` or `pull_reque
 
 The public contract workflow remains separate and can continue validating the public test harness without any secret.
 Every run checks out the current head of the isolated Preview branch at execution time, so the same workflow can validate the latest private changes without publishing them here.
+
+
+### Optional live semantic checks
+
+The workflow dispatch form has an opt-in checkbox named `run_semantic_live_checks`. Leave it off for routine validation. When enabled, it sends two real model requests to the Preview endpoint: a Mutanabbi biography lookup and a Quran-sensitive question that mentions the poet. This consumes Workers AI request quota. Run it only when Preview has available model quota; a provider-side HTTP 429 means the semantic check could not be completed and is not a passed test. External web search remains controlled by the Preview environment and is not enabled by this workflow.
