@@ -20,7 +20,7 @@ The private repository remains the single source of truth. Any future integratio
 
 ## Trusted-owner validation of the canonical private source
 
-The separate workflow `.github/workflows/private-source-validation.yml` runs when the owner `aljamharah` pushes to the default `main` branch, or manually when the owner dispatches it there. It checks out the private repository's isolated Preview integration branch `jmr/preview-rate-limit-2026-11-10` into the ephemeral hosted runner, runs the foundation, Quran, API, rate-limit and Durable Object tests there, checks the deployed Preview page and public poet index, performs a no-model greeting smoke request, and does not copy the source into this public repository or upload it as an artifact.
+The separate workflow `.github/workflows/private-source-validation.yml` runs when the owner `aljamharah` pushes to the default `main` branch, or manually when the owner dispatches it there. It checks out the private repository's isolated Preview integration branch `jmr/preview-rate-limit-2026-11-10` into the ephemeral hosted runner, runs the foundation, Quran, API, rate-limit and Durable Object tests there, checks the deployed Preview page and 11-record poet index, exercises the reviewed Fatir 35:28 Quran attribution path without a model call, performs a no-model greeting smoke request, and does not copy the source into this public repository or upload it as an artifact.
 
 ### One-time, no-cost setup
 
