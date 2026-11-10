@@ -35,3 +35,4 @@ The separate workflow `.github/workflows/private-source-validation.yml` runs whe
 Security boundary: this privileged workflow has no `pull_request` or `pull_request_target` trigger. The push trigger is restricted to `main` and the job additionally requires `github.actor == 'aljamharah'`. The token is supplied only to the checkout action, credential persistence is disabled, the workflow is limited to the repository owner, and it has read-only repository permissions.
 
 The public contract workflow remains separate and can continue validating the public test harness without any secret.
+Every run checks out the current head of the isolated Preview branch at execution time, so the same workflow can validate the latest private changes without publishing them here.
