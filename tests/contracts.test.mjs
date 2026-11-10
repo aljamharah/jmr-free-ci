@@ -40,6 +40,6 @@ test("private-source validation is manual-only, owner-gated, and read-only", asy
   assert.match(workflow, /if: github\.actor == 'aljamharah' && github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /Contents: Read-only/);
   assert.match(workflow, /persist-credentials: false/);
-  assert.match(workflow, /ref: jmr/preview-rate-limit-2026-11-10/);
+  assert.ok(workflow.includes("ref: jmr/preview-rate-limit-2026-11-10"));
   assert.doesNotMatch(workflow, /upload-artifact/);
 });
