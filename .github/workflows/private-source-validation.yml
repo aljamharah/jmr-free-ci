@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.actor == 'aljamharah'
+    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/main'
     name: Validate canonical private repository
     runs-on: ubuntu-latest
     steps:
