@@ -20,7 +20,7 @@ The private repository remains the single source of truth. Any future integratio
 
 ## Manual validation of the canonical private source
 
-The separate workflow `.github/workflows/private-source-validation.yml` is **manual only** and runs only when the owner `aljamharah` dispatches it. It checks out the private repository's `jmr-ai-foundation` branch into the ephemeral hosted runner, runs the real validation suite there, and does not copy the source into this public repository or upload it as an artifact.
+The separate workflow `.github/workflows/private-source-validation.yml` is **manual only** and runs only when the owner `aljamharah` dispatches it from the default `main` branch. It checks out the private repository's `jmr-ai-foundation` branch into the ephemeral hosted runner, runs the real validation suite there, and does not copy the source into this public repository or upload it as an artifact.
 
 ### One-time, no-cost setup
 
