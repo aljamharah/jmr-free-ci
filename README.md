@@ -18,7 +18,7 @@ GitHub Actions runs Node.js built-in tests against the public contract fixture. 
 The private repository remains the single source of truth. Any future integration with private source must use a reviewed, read-only mechanism and must never publish private files or secrets into this repository.
 
 
-## Manual validation of the canonical private source
+## Trusted-owner validation of the canonical private source
 
 The separate workflow `.github/workflows/private-source-validation.yml` runs when the owner `aljamharah` pushes to the default `main` branch, or manually when the owner dispatches it there. It checks out the private repository's isolated Preview integration branch `jmr/preview-rate-limit-2026-11-10` into the ephemeral hosted runner, runs the foundation, Quran, API, rate-limit and Durable Object tests there, and does not copy the source into this public repository or upload it as an artifact.
 
