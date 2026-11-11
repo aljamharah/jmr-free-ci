@@ -1,0 +1,134 @@
+name: Verify four Jamharah priorities (isolated)
+on:
+  push:
+    branches: [ci/4-priorities-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security-build:
+    name: Safe static output + JMR regressions
+    if: github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require existing read-only token
+        env:
+          READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: test -n "$READ_TOKEN"
+      - name: Checkout isolated private security branch
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: security/public-site-build-2026-11-11
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install validation-only Python libraries
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Verify build excludes drafts even if Functions fail open
+        working-directory: source
+        run: node scripts/test_public_site_build.mjs
+      - name: Verify public poetry API filtering and errors
+        working-directory: source
+        run: node --test tests/poems-privacy.test.mjs
+      - name: Library rights, HTML and JSON checks
+        working-directory: source
+        run: python scripts/validate_library.py
+      - name: Quran text and attribution
+        working-directory: source
+        run: node scripts/validate_jmr_quran.mjs
+      - name: JMR model-free contracts
+        working-directory: source
+        run: |
+          npm test
+          node scripts/test_jmr_api.mjs
+          node scripts/test_jmr_runtime.mjs
+      - name: Prepare live JMR test plan (not a model call)
+        working-directory: source
+        run: node scripts/evaluate_jmr_preview.mjs --dry-run --suite generative-smoke
+
+  quick-fixes:
+    name: Verify PR 40 unchanged design and quick fixes
+    if: github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout private PR 40 (read only)
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: review/quick-fixes-12-2026-11-11
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: quick
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install open-source library checks
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Test quick-fix guards, dictionary and links
+        working-directory: quick
+        run: |
+          node scripts/test_quick_fixes.mjs
+          node scripts/test_lexicon_integrity.cjs
+          node scripts/test_lexicon_fast_search.mjs
+          node scripts/audit_site_links.mjs
+      - name: Test rights and privacy
+        working-directory: quick
+        run: |
+          python scripts/validate_library.py
+          node --test tests/poems-privacy.test.mjs
+
+  live-site:
+    name: Inspect current live site and JMR
+    if: github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current private main for evaluation cases
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: main
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check published poem JSON without printing sensitive content
+        run: |
+          node --input-type=module <<'NODE'
+          const url = "https://aljamharah.pages.dev/content/poems.json";
+          const res = await fetch(url, {
+            headers: {"User-Agent":"AlJamharahSecurityQA/1.0 (+https://github.com/aljamharah/aljamharah)"},
+            signal: AbortSignal.timeout(20000)
+          });
+          console.log("Public poems endpoint HTTP status: " + res.status);
+          if (!res.ok) throw new Error("Live poem index unavailable; publication unverified");
+          let data;
+          try { data = await res.json(); } catch { throw new Error("Live poem endpoint did not return JSON"); }
+          if (!data || !Array.isArray(data.poems)) throw new Error("Invalid poems index");
+          if (data.poems.some(p => p.publication_status !== "published" ||
+            "rights_basis" in p || "text_attribution" in p)) {
+            throw new Error("SECURITY: editorial data visible in public poems response");
+          }
+          console.log("Live published poems: " + data.poems.length +
+            "; no drafts or private editorial fields detected.");
+          NODE
+      - name: Run three actual JMR API questions using free public endpoint
+        working-directory: source
+        env:
+          JMR_PREVIEW_URL: https://aljamharah.pages.dev
+        run: |
+          node scripts/evaluate_jmr_preview.mjs --suite generative-smoke --limit 3 --out "$RUNNER_TEMP/jmr-live-evaluation.json"
+          node --input-type=module -e 'import{readFileSync}from"node:fs"; const r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/jmr-live-evaluation.json","utf8")); console.log("JMR actual-model response success: "+r.successful+"/"+r.total+"; scholarly review must remain manual.");'
