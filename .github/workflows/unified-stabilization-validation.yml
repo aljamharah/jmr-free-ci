@@ -57,6 +57,9 @@ jobs:
       - name: Validate JMR knowledge index
         working-directory: source
         run: python scripts/validate_jmr_knowledge.py
+      - name: Check JMR module syntax
+        working-directory: source
+        run: node --input-type=module --check < functions/api/jmr.js
       - name: Run JMR, Quran and rate-limit unit tests
         working-directory: source
         run: npm test
