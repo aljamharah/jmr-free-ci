@@ -166,3 +166,27 @@ jobs:
             if(i+1<checks.length)await new Promise(r=>setTimeout(r,5500));
           }
           NODE
+
+
+  prosody-guard:
+    name: Check JMR prosody contradiction regression
+    if: github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read isolated JMR quality branch
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: quality/jmr-prosody-2026-11-11
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify contradictory prosody is blocked
+        working-directory: source
+        run: |
+          node --check functions/api/jmr.js
+          node scripts/test_jmr_api.mjs
+          npm test
