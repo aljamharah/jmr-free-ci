@@ -1,0 +1,68 @@
+name: Verify live Jamharah production after PR46 (read only)
+
+on:
+  push:
+    branches: [ci/verify-live-after-pr46-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check production build version, navigation and draft privacy
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          const origin="https://aljamharah.pages.dev";
+          async function get(path){
+            const res=await fetch(origin+path,{signal:AbortSignal.timeout(20000),redirect:"manual",
+              headers:{"user-agent":"JamharahFreeCIPublicVerification/1.0"}});
+            const body=await res.text();
+            return {status:res.status,body,headers:res.headers};
+          }
+          const probes=[
+            ["index.html", ["window.location.assign(\"lexicon.html?q=\"+encodeURIComponent(query)+\"#wordSearch\")"]],
+            ["catalog.html", ["window.location.assign(\"lexicon.html#wordSearch\")"]],
+            ["lexicon.html", ["new URLSearchParams(window.location.search).get(\"q\")"]],
+            ["book.html", ['rel="stylesheet"><style>','sidebar-brand img']],
+            ["reader.html", ['rel="stylesheet"><style>','sidebar-brand img']],
+            ["poets.html", ['id="menuButton"']],
+            ["poet.html", ['id="menuButton"']],
+            ["poem.html", ['id="menuButton"']],
+            ["jmr.html", ['جَمْر']]
+          ];
+          let good=0;
+          for(const [path,markers] of probes){
+            const res=await get("/"+path);
+            const missing=markers.filter(s=>!res.body.includes(s));
+            console.log("PAGE "+path+" status="+res.status+" new_release_markers="+(markers.length-missing.length)+"/"+markers.length);
+            if(res.status!==200||missing.length)process.exitCode=1;
+            else good++;
+          }
+          const raw=await get("/content/poems%2Ejson");
+          let publicSafe=false, publishedCount=0;
+          try{
+            const payload=JSON.parse(raw.body);
+            const poems=payload.poems;
+            if(Array.isArray(poems)){
+              publishedCount=poems.length;
+              publicSafe=poems.every(p=>p.publication_status==="published" &&
+                !["rights_basis","text_attribution","editorial_token","editorial_note"].some(k=>Object.hasOwn(p,k)));
+            }
+          }catch{}
+          console.log("PRIVACY encoded_poem_path HTTP="+raw.status+" public_safe="+publicSafe+" record_count="+publishedCount);
+          if(raw.status===200&&!publicSafe)process.exitCode=1;
+          const api=await get("/api/jmr");
+          console.log("JMR GET API status="+api.status+" expected=405");
+          if(api.status!==405)process.exitCode=1;
+          console.log("SUMMARY pages_with_new_build="+good+"/"+probes.length+
+            " privacy="+(raw.status!==200||publicSafe?"SAFE":"FAIL")+
+            " API_guard="+(api.status===405?"PASS":"FAIL"));
+          NODE
