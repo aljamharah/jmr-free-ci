@@ -47,7 +47,7 @@ jobs:
           node scripts/test_jmr_runtime.mjs
       - name: All Node unit tests
         working-directory: source
-        run: node --test
+        run: npm test
       - name: Ensure tests didn't alter tracked source
         working-directory: source
         run: git diff --exit-code -- .
