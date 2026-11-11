@@ -1,0 +1,94 @@
+name: Review twelve Jamharah quick fixes (read-only)
+
+on:
+  push:
+    branches:
+      - ci/review-quick-fixes-2026-11-11
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quick-fixes-readonly-ci
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate private review branch read-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Check out private review branch (read only)
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: review/quick-fixes-12-2026-11-11
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validation-only dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+
+      - name: Verify all 12 quick-fix invariants
+        working-directory: source
+        run: node scripts/test_quick_fixes.mjs
+
+      - name: Check all page and asset links
+        working-directory: source
+        run: node scripts/audit_site_links.mjs
+
+      - name: Check dictionary accuracy regression
+        working-directory: source
+        run: node scripts/test_lexicon_integrity.cjs
+
+      - name: Verify progressive lexicon index
+        working-directory: source
+        run: node scripts/test_lexicon_fast_search.mjs
+
+      - name: Ensure draft poems do not appear in the public API response
+        working-directory: source
+        run: node --test tests/poems-privacy.test.mjs
+
+      - name: Validate book records, rights, JSON and JavaScript
+        working-directory: source
+        run: python scripts/validate_library.py
+
+      - name: Validate canonical Quran source
+        working-directory: source
+        run: node scripts/validate_jmr_quran.mjs
+
+      - name: Validate JMR knowledge index
+        working-directory: source
+        run: python scripts/validate_jmr_knowledge.py
+
+      - name: Run full JMR unit suite
+        working-directory: source
+        run: npm test
+
+      - name: Run JMR API mock tests
+        working-directory: source
+        run: node scripts/test_jmr_api.mjs
+
+      - name: Run JMR runtime tests
+        working-directory: source
+        run: node scripts/test_jmr_runtime.mjs
+
+      - name: Verify poet-index regression tests
+        working-directory: source
+        run: python -m unittest discover -s tests -p 'test_jmr_poets_index.py'
+
+      - name: Verify live-evaluation harness without consuming paid model quota
+        working-directory: source
+        run: node scripts/evaluate_jmr_preview.mjs --dry-run --suite generative-smoke
