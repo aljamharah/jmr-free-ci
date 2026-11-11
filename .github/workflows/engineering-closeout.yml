@@ -14,7 +14,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: af7872c24a94b43f5b9ced05ab5996df0e28d9cc
+          ref: 09fc77eaa0a2fcff91f2fbd297cf45ade3652007
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: source
@@ -57,7 +57,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: af7872c24a94b43f5b9ced05ab5996df0e28d9cc
+          ref: 09fc77eaa0a2fcff91f2fbd297cf45ade3652007
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: source
@@ -82,7 +82,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: af7872c24a94b43f5b9ced05ab5996df0e28d9cc
+          ref: 09fc77eaa0a2fcff91f2fbd297cf45ade3652007
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: source
@@ -131,4 +131,35 @@ jobs:
           assert.equal(api.status,405);
           assert.match(api.headers.get('cache-control')||'',/no-store/);
           console.log('LIVE_JMR_GUARD_OK 405');
+          NODE
+  jmr-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 09fc77eaa0a2fcff91f2fbd297cf45ade3652007
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Bounded real JMR model smoke: 3 public synthetic prompts
+        working-directory: source
+        run: |
+          node scripts/evaluate_jmr_preview.mjs --suite generative-smoke --limit 3 --url https://aljamharah.pages.dev --out /tmp/jmr-live-closeout.json
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const data=JSON.parse(readFileSync('/tmp/jmr-live-closeout.json','utf8'));
+          for(const r of data.results){
+            const answer=String(r.answer||'');
+            console.log('LIVE_MODEL_CASE',r.id,'status='+r.http_status,
+              'chars='+answer.length,'review='+r.evaluation_status,
+              'has_self_correction='+/تصحيح المسار العروضي|تصحيح التقطيع/.test(answer));
+            if(r.id==='prosody-procedure')
+              console.log('PROSODY_SAMPLE',JSON.stringify(answer.slice(0,260)));
+          }
+          if(data.results.some(r=>r.http_status!==200 || !r.ok))process.exitCode=1;
           NODE
