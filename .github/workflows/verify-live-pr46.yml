@@ -1,4 +1,4 @@
-name: Verify live Jamharah production after PR46 (read only)
+name: Verify live Jamharah production after PR46 plus PR50 (read only)
 
 on:
   push:
@@ -46,6 +46,18 @@ jobs:
             if(res.status!==200||missing.length)process.exitCode=1;
             else good++;
           }
+          // Confirm PR50 non-submitting header buttons reached Cloudflare.
+          let fixed=0;
+          for(const path of ["index.html","catalog.html","poets.html","poet.html","poem.html"]){
+            const response=await get("/"+path);
+            const tags=["menuButton","searchButton","prayerButton","themeButton"].map(id=>
+              response.body.match(new RegExp('<button[^>]*id="'+id+'"[^>]*>'))?.[0]||"");
+            const ok=response.status===200&&tags.every(tag=>/type="button"/.test(tag));
+            console.log("HEADER_PR50 "+path+" status="+response.status+" four_button_types="+ok);
+            if(!ok)process.exitCode=1;
+            else fixed++;
+          }
+          console.log("HEADER_SUMMARY "+fixed+"/5 newer header pages verified");
           const raw=await get("/content/poems%2Ejson");
           let publicSafe=false, publishedCount=0;
           try{
