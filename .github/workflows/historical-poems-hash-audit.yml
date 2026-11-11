@@ -1,0 +1,81 @@
+name: Audit historical poems.json revisions without exposing content
+
+on:
+  push:
+    branches: [ci/audit-historical-poems-hashes-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout private Aljamharah history read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: befc0219553e9c1250ce7ae8b311e44160b2249b
+          fetch-depth: 0
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Analyze every historical unique version without printing contents
+        working-directory: source
+        run: |
+          node --input-type=module <<'NODE'
+          import {execFileSync} from "node:child_process";
+          import {createHash} from "node:crypto";
+          const versions=new Map();
+          const commits=execFileSync("git",["log","--all","--format=%H","--","content/poems.json"],{encoding:"utf8",maxBuffer:40e6}).trim().split("\n").filter(Boolean);
+          for(const sha of commits){
+            let buffer;
+            try{buffer=execFileSync("git",["show",sha+":content/poems.json"],{maxBuffer:30e6});}
+            catch{continue}
+            const hash=createHash("md5").update(buffer).digest("hex");
+            if(versions.has(hash))continue;
+            try{
+              const data=JSON.parse(buffer.toString("utf8"));
+              if(!Array.isArray(data.poems)) throw Error("poems is not an array");
+              const poems=data.poems;
+              const drafts=poems.filter(p=>p.publication_status!=="published");
+              const editorial=poems.filter(p=>Object.hasOwn(p,"rights_basis")||Object.hasOwn(p,"text_attribution")||Object.hasOwn(p,"editorial_token")||Object.hasOwn(p,"editorial_note"));
+              const report={
+                hash,
+                commit_sha:sha,
+                total_poems:poems.length,
+                unpublished_records:drafts.length,
+                records_with_editorial_fields:editorial.length,
+                has_unpublished: drafts.length>0,
+                has_editorial_metadata: editorial.length>0
+              };
+              versions.set(hash,report);
+            }catch(e){versions.set(hash,{hash,commit_sha:sha,parse_error:true,error_type:e.name})}
+          }
+          console.log("Historical changes reviewed: "+commits.length);
+          console.log("Unique historical file content hashes: "+versions.size);
+          console.log("Current known vulnerable hash detected: "+versions.has("342ebc591eb66b96af2bec1d1bdb6a4a"));
+          console.log("Current sanitized deployment hash detected in source history: "+versions.has("16c207f3"));
+          for(const item of [...versions.values()].sort((a,b)=>a.hash.localeCompare(b.hash)))
+            console.log("HASH_AUDIT "+JSON.stringify(item));
+          const known=[
+            "0730debc","9a5d6df1","a066a20c","9b1d06da","8a2a7527",
+            "5dd54691","31220c2b","d45f7dd9","c3135257","7ef00b29",
+            "d6a86992","da8d4438","a3ba1270","66061a92","ec1a0853",
+            "8dde3326","52814846","0f09a517","342ebc59"
+          ];
+          for(const prefix of known){
+            const x=[...versions.values()].filter(v=>v.hash.startsWith(prefix));
+            console.log("GROUP "+prefix+" matching_revisions="+x.length+
+              (x.length?(" has_unpublished="+x.some(v=>v.has_unpublished)+" has_editorial_metadata="+x.some(v=>v.has_editorial_metadata)):" NOT_FOUND"));
+          }
+          const absent=known.filter(prefix=>![...versions.keys()].some(hash=>hash.startsWith(prefix)));
+          if(absent.length){console.log("Some Cloudflare file hashes are not found in Git history: "+absent.join(","));process.exitCode=1;}
+          else console.log("SUCCESS: all Cloudflare hash prefixes matched historical Git content.");
+          NODE
