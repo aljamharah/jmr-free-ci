@@ -1,0 +1,60 @@
+name: Final read-only production smoke after verified engineering merges
+on:
+  push:
+    branches:
+      - ci/final-production-readonly-2026-11-11
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  production-read-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check live HTML, logo, sanitized poems, API guards (no AI POST)
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const origin='https://aljamharah.pages.dev';
+          async function probe(path){
+            const r=await fetch(origin+path,{signal:AbortSignal.timeout(15000),redirect:'follow',
+              headers:{'User-Agent':'JMRFreeCISafeProductionSmoke/1.0'}});
+            const body=await r.text();
+            return {status:r.status,body,headers:r.headers};
+          }
+          const pages=['index.html','catalog.html','lexicon.html','library.html','book.html',
+            'reader.html','poets.html','poet.html','poem.html','jmr.html'];
+          for(const path of pages){
+            const r=await probe('/'+path);
+            assert.equal(r.status,200,path+' missing');
+            assert.ok(r.body.includes('assets/AFF71118-81CC-48DF-A661-4410C687EC8F.png'),
+              path+' approved logo missing');
+            if(path==='index.html') assert.ok(r.body.includes('lexicon.html?q='),
+              'homepage functional search routing missing');
+            if(path==='jmr.html')assert.ok(r.body.includes('poet_biography_reference'),
+              'JMR grouped internal sources missing');
+            if(path==='library.html')assert.ok(r.body.includes('تعذّر تحميل بيانات المكتبة حالياً'),
+              'library outage messaging missing');
+            console.log('LIVE_PAGE '+path+' HTTP_200');
+          }
+          const raw=await probe('/content/poems%2Ejson');
+          assert.equal(raw.status,200,'sanitized poems must remain available');
+          const content=JSON.parse(raw.body).poems;
+          assert.equal(content.length,11,'public poem count unexpectedly changed');
+          assert.ok(content.every(p=>p.publication_status==='published'&&
+            !['rights_basis','text_attribution','editorial_note','editorial_token'].some(k=>Object.hasOwn(p,k))),
+            'editorial-only poem record leaked');
+          console.log('LIVE_POEMS encoded=200 sanitized=true published_records='+content.length);
+          const method=await probe('/api/jmr');
+          assert.equal(method.status,405,'JMR GET must reject');
+          assert.match(method.headers.get('Cache-Control')||'',/no-store/,
+            'API errors should not cache a private conversation');
+          console.log('LIVE_JMR GET rejected=405 no_store=true');
+          const docs=await probe('/docs/PROJECT-COMMAND-CENTER-AR.md');
+          assert.ok(docs.status!==200,'internal project documents must not be served from dist');
+          console.log('LIVE_INTERNAL_DOCS not_public_status='+docs.status);
+          console.log('PRODUCTION_READ_ONLY_SUCCESS pages=10 poems=11 api_guard=405 no_ai_calls=1');
+          NODE
