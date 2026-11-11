@@ -1,0 +1,123 @@
+name: Verify isolated Pages staging security (no production writes)
+
+on:
+  push:
+    branches: [ci/staging-pages-privacy-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Jamharah source read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: main
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Independently validate safe dist build
+        working-directory: source
+        run: node scripts/test_public_site_build.mjs
+      - name: Verify the staging deployment and encoded-path security
+        env:
+          STAGING_URL: https://aljamharah-staging.pages.dev
+          DEPLOYMENT_URL: https://ad7f49ca.aljamharah-staging.pages.dev
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from "node:fs";
+          const source = JSON.parse(readFileSync("source/content/poems.json", "utf8"));
+          const unpublished=source.poems.filter(row => row.publication_status !== "published");
+          if (unpublished.length===0) throw Error("No draft sentinels; cannot verify privacy.");
+          const markers=unpublished.flatMap(row=>[row.slug,typeof row.body==="string" && row.body.length>60?row.body.slice(0,60):null]).filter(Boolean);
+          const bases=[process.env.STAGING_URL,process.env.DEPLOYMENT_URL];
+          const variants=[
+            "/content/poems.json",
+            "/content/poems.json?draft=1",
+            "/content/poems%2Ejson",
+            "/content/poems%2ejson",
+            "/content/poems%252Ejson",
+            "/content/poems%2Ejson?x=1",
+            "/content//poems.json",
+            "/content/./poems.json",
+            "/content/poems.json/",
+            "/content/POEMS.JSON",
+            "/content/Poems.json"
+          ];
+          const publicPaths=[
+            "/","/index.html","/lexicon.html","/library.html",
+            "/jmr.html","/poet.html","/poem.html","/poets.html",
+            "/catalog.html","/book.html","/reader.html",
+            "/assets/AFF71118-81CC-48DF-A661-4410C687EC8F.png",
+            "/assets/lexicon-integrity.js","/content/jmr/knowledge/index.json"
+          ];
+          const failures=[];
+          const get=async (base,path)=>{
+            try {
+              const response=await fetch(base+path,{redirect:"follow",headers:{"User-Agent":"JamharahStagingSecurityCI/1.0"},signal:AbortSignal.timeout(12000)});
+              return {response,body:await response.text()};
+            } catch (e) {
+              failures.push("NETWORK "+new URL(base).hostname+" "+path+" "+e.name);
+              return null;
+            }
+          };
+          for(const base of bases) {
+            console.log("Testing staging host "+new URL(base).hostname);
+            let leaks=0;
+            for(const path of variants) {
+              const data=await get(base,path);
+              if(!data)continue;
+              const {response,body}=data;
+              let leaked=markers.some(marker=>body.includes(marker));
+              if(response.ok && response.headers.get("content-type")?.includes("json")) {
+                try{
+                  const value=JSON.parse(body);
+                  if(Array.isArray(value.poems)){
+                    leaked ||= value.poems.some(item=>item.publication_status!=="published"||
+                      Object.hasOwn(item,"rights_basis")||
+                      Object.hasOwn(item,"text_attribution")||
+                      Object.hasOwn(item,"editorial_token"));
+                  }
+                }catch{failures.push("MALFORMED_JSON "+path)}
+              }
+              if(leaked){failures.push("EXPOSURE "+path);leaks++}
+              if(path==="/content/poems.json"&&response.status===200){
+                try{
+                  const obj=JSON.parse(body);
+                  if(!Array.isArray(obj.poems)||obj.poems.length!==11){
+                    failures.push("UNEXPECTED_PUBLIC_POEMS "+path)
+                  }
+                }catch{failures.push("INVALID_PUBLIC_POEMS "+path)}
+              }
+              console.log("Poems path "+path+" HTTP "+response.status+" draft_exposure="+(leaked?"YES":"none"));
+            }
+            for(const path of publicPaths){
+              const data=await get(base,path);
+              if(!data)continue;
+              const {response}=data;
+              console.log("Public asset "+path+" HTTP "+response.status);
+              if(response.status!==200)failures.push("PUBLIC_ASSET "+path+" HTTP "+response.status);
+            }
+            const method=await get(base,"/api/jmr");
+            if(method){
+              console.log("Unbound staging JMR API GET HTTP "+method.response.status);
+              if(method.response.status!==405)failures.push("JMR_METHOD_GUARD "+method.response.status);
+            }
+            console.log("Host completed; draft exposures="+leaks);
+          }
+          if(failures.length) {
+            console.error("Staging checks failed: "+failures.join("; "));
+            process.exitCode=1;
+          } else {
+            console.log("SUCCESS: staging pages and both hostnames passed; no unpublished poem content or fields visible.");
+          }
+          NODE
