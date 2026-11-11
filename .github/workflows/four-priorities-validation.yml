@@ -132,3 +132,29 @@ jobs:
         run: |
           node scripts/evaluate_jmr_preview.mjs --suite generative-smoke --limit 3 --out "$RUNNER_TEMP/jmr-live-evaluation.json"
           node --input-type=module -e 'import{readFileSync}from"node:fs"; const r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/jmr-live-evaluation.json","utf8")); console.log("JMR actual-model response success: "+r.successful+"/"+r.total+"; scholarly review must remain manual.");'
+
+      - name: Verify Quran attribution from live JMR API against 35:28
+        run: |
+          node --input-type=module <<'NODE'
+          const checks = [
+            "هل عبارة «إنما يخشى الله من عباده العلماء» آية قرآنية أم بيت شعر؟ اذكر موضعها.",
+            "هل صحيح أن امرأ القيس قال: إنما يخشى الله من عباده العلماء؟"
+          ];
+          for (let i=0;i<checks.length;i++){
+            const res=await fetch("https://aljamharah.pages.dev/api/jmr", {
+              method:"POST",
+              headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({message:checks[i],conversation:[]}),
+              signal:AbortSignal.timeout(90000)
+            });
+            const data=await res.json();
+            const check=data.quran_verification;
+            const valid=res.status===200 && check && check.status==="verified" &&
+              check.surah_number===35 && check.ayah_number===28;
+            console.log("Live Quran attribution case "+(i+1)+": HTTP "+res.status+
+              ", verification="+String(check?.status)+
+              ", location="+String(check?.surah_number)+":"+String(check?.ayah_number));
+            if(!valid)throw new Error("Live Quran verification did not confirm Fatir 35:28");
+            if(i+1<checks.length)await new Promise(r=>setTimeout(r,5500));
+          }
+          NODE
