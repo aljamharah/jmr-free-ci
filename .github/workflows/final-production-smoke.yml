@@ -54,7 +54,13 @@ jobs:
             'API errors should not cache a private conversation');
           console.log('LIVE_JMR GET rejected=405 no_store=true');
           const docs=await probe('/docs/PROJECT-COMMAND-CENTER-AR.md');
-          assert.ok(docs.status!==200,'internal project documents must not be served from dist');
-          console.log('LIVE_INTERNAL_DOCS not_public_status='+docs.status);
-          console.log('PRODUCTION_READ_ONLY_SUCCESS pages=10 poems=11 api_guard=405 no_ai_calls=1');
+          // Cloudflare Pages may return HTML fallback 200 for unknown paths.
+          // Verify that the actual private Markdown is NOT exposed, not just the status.
+          const markdownExposed=docs.body.includes('# الجمهرة وجَمْر AI — مركز العمل التقني الموحد')
+            || docs.body.includes('**الحالة التي جرى التحقق منها:**');
+          assert.equal(markdownExposed,false,'private project Markdown source is exposed');
+          console.log('LIVE_INTERNAL_DOCS http='+docs.status+
+            ' content_type='+(docs.headers.get('Content-Type')||'unknown').split(';')[0]+
+            ' markdown_exposed='+markdownExposed);
+          console.log('PRODUCTION_READ_ONLY_SUCCESS pages=10 poems=11 api_guard=405 ai_post_calls=0');
           NODE
