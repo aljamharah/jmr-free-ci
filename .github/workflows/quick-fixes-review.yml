@@ -92,3 +92,42 @@ jobs:
       - name: Verify live-evaluation harness without consuming paid model quota
         working-directory: source
         run: node scripts/evaluate_jmr_preview.mjs --dry-run --suite generative-smoke
+
+      - name: Probe Cloudflare Preview pages and public-poems filtering
+        env:
+          PREVIEW_URL: https://review-quick-fixes-12-2026-1.aljamharah.pages.dev
+        run: |
+          node --input-type=module <<'NODE'
+          const preview = process.env.PREVIEW_URL;
+          const pages = ["/", "/lexicon.html", "/library.html", "/jmr.html", "/assets/lexicon-integrity.js"];
+          for (const path of pages) {
+            const response = await fetch(new URL(path, preview), {
+              redirect: "follow",
+              signal: AbortSignal.timeout(20000)
+            });
+            console.log(path + " -> HTTP " + response.status);
+            if (!response.ok) throw Error("Preview asset unavailable: " + path);
+          }
+          const resource = "/content/poems.json";
+          const response = await fetch(new URL(resource, preview), {
+            headers: {Accept:"application/json"},
+            signal: AbortSignal.timeout(20000)
+          });
+          console.log(resource + " -> HTTP " + response.status);
+          if (!response.ok) throw Error("Preview public poems endpoint unavailable");
+          const result = await response.json();
+          const poems = result?.poems;
+          if (!Array.isArray(poems) || poems.length !== 11) {
+            throw Error("Unexpected public poems record count; do not publish");
+          }
+          if (poems.some(item => item.publication_status !== "published" ||
+            Object.hasOwn(item,"rights_basis") || Object.hasOwn(item,"text_attribution"))) {
+            throw Error("Draft or editorial-only poem data exposed; do not publish");
+          }
+          console.log("Public poems endpoint: 11 published records, no drafts or editorial-only fields.");
+          const api = await fetch(new URL("/api/jmr", preview), {
+            method:"GET",signal:AbortSignal.timeout(20000)
+          });
+          console.log("GET /api/jmr -> HTTP " + api.status);
+          if (api.status !== 405) throw Error("API method guard failed on Preview");
+          NODE
