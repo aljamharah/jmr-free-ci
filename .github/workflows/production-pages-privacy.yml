@@ -1,0 +1,154 @@
+name: Verify canonical production privacy after sanitized Pages build
+
+on:
+  push:
+    branches: [ci/production-pages-privacy-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-production:
+    name: Canonical and new deployment security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact deployed source read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: befc0219553e9c1250ce7ae8b311e44160b2249b
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify source build still sanitizes output
+        working-directory: source
+        run: node scripts/test_public_site_build.mjs
+      - name: Probe production paths without printing sensitive content
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from "node:fs";
+          const source=JSON.parse(readFileSync("source/content/poems.json","utf8"));
+          const drafts=source.poems.filter(p=>p.publication_status!=="published");
+          if(drafts.length<1) throw Error("Draft sentinels unexpectedly missing");
+          const markers=drafts.flatMap(p=>[p.slug,typeof p.body==="string"&&p.body.length>50?p.body.slice(0,50):null]).filter(Boolean);
+          const bases=["https://aljamharah.pages.dev","https://56e7e6e5.aljamharah.pages.dev"];
+          const poemPaths=[
+            "/content/poems.json",
+            "/content/poems.json?draft=1",
+            "/content/poems%2Ejson",
+            "/content/poems%2ejson",
+            "/content/poems%252Ejson",
+            "/content/poems%2Ejson?x=1",
+            "/content//poems.json",
+            "/content/./poems.json",
+            "/content/poems.json/",
+            "/content/POEMS.JSON",
+            "/content/Poems.json"
+          ];
+          const publicPaths=[
+            "/","/index.html","/lexicon.html","/library.html",
+            "/jmr.html","/poet.html","/poem.html","/poets.html",
+            "/catalog.html","/book.html","/reader.html",
+            "/assets/AFF71118-81CC-48DF-A661-4410C687EC8F.png",
+            "/assets/lexicon-integrity.js",
+            "/content/jmr/knowledge/index.json"
+          ];
+          const failures=[];
+          async function probe(base,path,method="GET",payload) {
+            const url=base+path;
+            try {
+              const response=await fetch(url,{method,redirect:"follow",
+                headers: {"User-Agent":"AlJamharahProductionPrivacyCheck/1.0",
+                  ...(payload?{"Content-Type":"application/json"}:{})},
+                body:payload?JSON.stringify(payload):undefined,
+                signal:AbortSignal.timeout(16000)});
+              return {status:response.status,ct:response.headers.get("content-type")||"",
+                body:await response.text()};
+            }catch(e){
+              failures.push("UNREACHABLE "+new URL(base).hostname+path+" "+e.name);
+              return null;
+            }
+          }
+          for(const base of bases){
+            console.log("Testing production host: "+new URL(base).hostname);
+            for(const path of poemPaths){
+              const v=await probe(base,path);
+              if(!v)continue;
+              let exposed=markers.some(m=>v.body.includes(m));
+              if(v.ct.includes("json")){
+                try {
+                  const data=JSON.parse(v.body);
+                  if(Array.isArray(data.poems)){
+                    exposed ||= data.poems.some(p=>p.publication_status!=="published"||
+                      Object.hasOwn(p,"rights_basis")||
+                      Object.hasOwn(p,"text_attribution")||
+                      Object.hasOwn(p,"editorial_token"));
+                    if(path==="/content/poems.json" && data.poems.length!==11) failures.push("PUBLIC_COUNT "+path+" "+data.poems.length);
+                  }else if(path==="/content/poems.json" && v.status===200) failures.push("UNEXPECTED_JSON "+path);
+                }catch(e){if(v.status===200)failures.push("BAD_JSON "+path)}
+              }
+              console.log("poems "+path+" HTTP "+v.status+" exposure="+(exposed?"DETECTED":"none"));
+              if(exposed)failures.push("DRAFT_EXPOSURE "+path);
+              if(path==="/content/poems.json"&&v.status!==200)failures.push("NORMAL_PUBLIC_POEMS_ROUTE "+v.status);
+            }
+            for(const path of publicPaths){
+              const v=await probe(base,path);if(!v)continue;
+              console.log("asset "+path+" HTTP "+v.status);
+              if(v.status!==200)failures.push("ASSET_FAILURE "+path+" "+v.status);
+            }
+            const guard=await probe(base,"/api/jmr");
+            if(guard){
+              console.log("JMR GET method guard HTTP "+guard.status);
+              if(guard.status!==405) failures.push("JMR_METHOD_GUARD "+guard.status);
+            }
+          }
+          if(failures.length){
+            console.error("PRODUCTION VERIFICATION FAILED: "+failures.join("; "));
+            process.exitCode=1;
+          } else console.log("PRODUCTION VERIFIED: Both canonical and deployment URLs reveal no drafts, public assets available.");
+          NODE
+
+  legacy-deployment:
+    name: Prior deployment exposure inventory (read-only, warning only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout private draft sentinels read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: befc0219553e9c1250ce7ae8b311e44160b2249b
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check reported old deployment URL without printing private content
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from "node:fs";
+          const src=JSON.parse(readFileSync("source/content/poems.json","utf8"));
+          const drafts=src.poems.filter(p=>p.publication_status!=="published");
+          const tokens=drafts.flatMap(p=>[p.slug,typeof p.body==="string"&&p.body.length>50?p.body.slice(0,50):null]).filter(Boolean);
+          const base="https://49d39bf3.aljamharah.pages.dev";
+          for(const path of ["/content/poems.json","/content/poems%2Ejson"]){
+            try{
+              const res=await fetch(base+path,{signal:AbortSignal.timeout(15000),headers:{"User-Agent":"JamharahLegacyExposureAudit/1.0"}});
+              const body=await res.text();
+              const exposed=tokens.some(t=>body.includes(t))||(()=>{
+                if(!res.headers.get("content-type")?.includes("json"))return false;
+                try{const v=JSON.parse(body);return Array.isArray(v.poems)&&v.poems.some(p=>p.publication_status!=="published"||Object.hasOwn(p,"rights_basis")||Object.hasOwn(p,"text_attribution"))}catch{return false}
+              })();
+              console.log("old deployment "+path+" HTTP "+res.status+" sensitive_exposure="+(exposed?"CONFIRMED":"not detected"));
+              if(exposed)console.log("::warning title=Legacy Pages URL still exposes drafts::An old deployment remains publicly accessible and must be remediated separately.");
+            }catch(e){console.log("old deployment probe failed "+path+" "+e.name)}
+          }
+          NODE
