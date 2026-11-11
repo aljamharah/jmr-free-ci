@@ -132,6 +132,14 @@ jobs:
         run: |
           node scripts/evaluate_jmr_preview.mjs --suite generative-smoke --limit 3 --out "$RUNNER_TEMP/jmr-live-evaluation.json"
           node --input-type=module -e 'import{readFileSync}from"node:fs"; const r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/jmr-live-evaluation.json","utf8")); console.log("JMR actual-model response success: "+r.successful+"/"+r.total+"; scholarly review must remain manual.");'
+          node --input-type=module <<'NODE'
+          import {readFileSync} from "node:fs";
+          const report=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/jmr-live-evaluation.json","utf8"));
+          for(const entry of report.results){
+            console.log("EVALUATION "+entry.id+": sources="+entry.sources.length+
+              "; excerpt="+entry.answer.replace(/\s+/g," ").slice(0,1100));
+          }
+          NODE
 
       - name: Verify Quran attribution from live JMR API against 35:28
         run: |
