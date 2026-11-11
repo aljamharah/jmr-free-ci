@@ -1,0 +1,43 @@
+name: Real browser check of Jamharah sanitized preview (mobile and desktop)
+
+on:
+  push:
+    branches: [ci/jamharah-browser-preview-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout engineering draft privately (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: engineering/technical-foundation-masterplan-2026-11-11
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install free browser test runner
+        working-directory: source
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            npx playwright install --with-deps chromium
+          fi
+      - name: Build sanitized deploy-only site
+        working-directory: source
+        run: node scripts/build_public_site.mjs
+      - name: Test real mobile and desktop browser interactions
+        working-directory: source
+        run: node scripts/test_browser_navigation.mjs
+      - name: No source changes from browser test
+        working-directory: source
+        run: git diff --exit-code -- .
