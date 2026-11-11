@@ -146,7 +146,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Bounded real JMR model smoke: 3 public synthetic prompts
+      - name: "Bounded real JMR model smoke: 3 public synthetic prompts"
         working-directory: source
         run: |
           node scripts/evaluate_jmr_preview.mjs --suite generative-smoke --limit 3 --url https://aljamharah.pages.dev --out /tmp/jmr-live-closeout.json
