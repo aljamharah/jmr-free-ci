@@ -1,0 +1,70 @@
+name: Validate unified JMR stabilization
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/unified-stabilization-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jmr-unified-stabilization
+  cancel-in-progress: true
+
+jobs:
+  test:
+    if: github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require read-only private-source token
+        env:
+          READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          if [ -z "$READ_TOKEN" ]; then
+            echo "::error::Missing read-only private source token"
+            exit 1
+          fi
+      - name: Checkout isolated unified stabilization branch
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: stabilization/foundation-2026-11-11
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: source
+      - name: Display inspected commit
+        working-directory: source
+        run: git rev-parse HEAD
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install open-source test-only dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Check library records and strict rights approval
+        working-directory: source
+        run: python scripts/validate_library.py
+      - name: Check fast lexicon shards and browser script syntax
+        working-directory: source
+        run: node scripts/test_lexicon_fast_search.mjs
+      - name: Validate Quran text and attribution
+        working-directory: source
+        run: node scripts/validate_jmr_quran.mjs
+      - name: Validate JMR knowledge index
+        working-directory: source
+        run: python scripts/validate_jmr_knowledge.py
+      - name: Run JMR, Quran and rate-limit unit tests
+        working-directory: source
+        run: npm test
+      - name: Run API mocks and retrieval-runtime tests
+        working-directory: source
+        run: |
+          node scripts/test_jmr_api.mjs
+          node scripts/test_jmr_runtime.mjs
+      - name: Check poet indexing from source
+        working-directory: source
+        run: python -m unittest discover -s tests -p 'test_jmr_poets_index.py'
