@@ -46,6 +46,9 @@ jobs:
       - name: Check lightweight lexicon script syntax
         working-directory: private-source
         run: node --check assets/lexicon-lite.js
+      - name: Verify extended search requires user confirmation
+        working-directory: private-source
+        run: grep -q 'window.confirm' assets/lexicon-lite.js
       - name: Run stabilization regression tests
         working-directory: private-source
         run: node --test tests/stabilization.test.mjs
