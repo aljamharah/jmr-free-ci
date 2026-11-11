@@ -22,7 +22,7 @@ jobs:
           import assert from "node:assert/strict";
           const origin="https://aljamharah.pages.dev";
           async function get(path){
-            const res=await fetch(origin+path,{signal:AbortSignal.timeout(20000),redirect:"manual",
+            const res=await fetch(origin+path,{signal:AbortSignal.timeout(20000),redirect:"follow",
               headers:{"user-agent":"JamharahFreeCIPublicVerification/1.0"}});
             const body=await res.text();
             return {status:res.status,body,headers:res.headers};
