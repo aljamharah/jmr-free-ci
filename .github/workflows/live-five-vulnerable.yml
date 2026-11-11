@@ -1,0 +1,61 @@
+name: Independently verify five historical deployment URLs (no deletion)
+
+on:
+  push:
+    branches: [ci/live-five-vulnerable-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout private source only for draft fingerprints
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: befc0219553e9c1250ce7ae8b311e44160b2249b
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Read-only URL probes; log no private poem contents
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const poems=JSON.parse(readFileSync('source/content/poems.json','utf8')).poems;
+          const unpublished=poems.filter(p=>p.publication_status!=='published');
+          const markers=unpublished.flatMap(p=>[p.slug,typeof p.body==='string'&&p.body.length>60?p.body.slice(0,60):null]).filter(Boolean);
+          const ids=['f78ce27e','2f9ff85c','37b87c3e','79de4862','8aca6d2a'];
+          let exposed=0,unknown=0;
+          for(const id of ids) {
+            const url=`https://${id}.aljamharah.pages.dev/content/poems%2Ejson`;
+            try{
+              const response=await fetch(url,{signal:AbortSignal.timeout(12000),headers:{'User-Agent':'JMRFreeCIHistoricalSecurityProbe/1.0'}});
+              const body=await response.text();
+              let hasDraft=markers.some(m=>body.includes(m));
+              let editorial=false,parsed=false;
+              try{
+                const data=JSON.parse(body);
+                if(Array.isArray(data.poems)){
+                  parsed=true;
+                  hasDraft ||=data.poems.some(p=>p.publication_status!=='published');
+                  editorial=data.poems.some(p=>Object.hasOwn(p,'rights_basis')||Object.hasOwn(p,'text_attribution'));
+                }
+              }catch{}
+              if(hasDraft||editorial)exposed++;
+              else unknown++;
+              console.log(`PROBE ${id} HTTP ${response.status} parsed=${parsed} unpublished=${hasDraft} editorial_fields=${editorial}`);
+            } catch(e){
+              unknown++;
+              console.log(`PROBE ${id} NETWORK_ERROR ${e.name}`);
+            }
+          }
+          console.log(`SUMMARY confirmed_current_exposures=${exposed} not_confirmed=${unknown} tested=${ids.length}`);
+          if(unknown)console.log('ATTENTION: some URLs did not reproduce private-content exposure; investigate before treating as confirmed.');
+          NODE
