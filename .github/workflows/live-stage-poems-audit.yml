@@ -1,0 +1,62 @@
+name: Audit six historical draft staging URLs without exposing their contents
+
+on:
+  push:
+    branches: [ci/live-stage-poems-audit-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: befc0219553e9c1250ce7ae8b311e44160b2249b
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Read-only public URL checks
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const current=JSON.parse(readFileSync('source/content/poems.json','utf8'));
+          const markers=current.poems.filter(x=>x.publication_status!=='published').map(x=>x.slug).filter(Boolean);
+          const cases={
+            "6c1e3ded":"afb3d8a3ebe9",
+            "a3d085eb":"82acb8debf20",
+            "05895cda":"e556b30f2ca",
+            "af6d6296":"754214702606",
+            "ce43a12b":"045e7de6c886",
+            "5b4c4469":"4eb9041ea84c",
+            "8a686b3f":"fd55fb072e56",
+            "abba1d80":"f490453df8d8"
+          };
+          let confirmed=0;
+          for(const [id,expectedCommit] of Object.entries(cases)){
+            try{
+              const res=await fetch('https://'+id+'.aljamharah.pages.dev/content/poems%2Ejson',{signal:AbortSignal.timeout(15000)});
+              const body=await res.text();
+              let drafts=0,editorial=0,knownSlug=false,parsed=false;
+              try{
+                const obj=JSON.parse(body);
+                if(Array.isArray(obj.poems)){
+                  parsed=true;
+                  drafts=obj.poems.filter(p=>p.publication_status!=='published').length;
+                  editorial=obj.poems.filter(p=>Object.hasOwn(p,'rights_basis')||Object.hasOwn(p,'text_attribution')).length;
+                  knownSlug=markers.some(marker=>body.includes(marker));
+                }
+              }catch{}
+              if(drafts>0||editorial>0)confirmed++;
+              console.log('CHECK '+id+' commit_hint='+expectedCommit+' HTTP '+res.status+' valid_poems_json='+parsed+' unpublished_count='+drafts+' editorial_record_count='+editorial+' current_draft_identifier_present='+knownSlug);
+            }catch(e){console.log('CHECK '+id+' ERROR '+e.name)}
+          }
+          console.log('SUMMARY exposed_urls='+confirmed+' tested_urls='+Object.keys(cases).length);
+          NODE
