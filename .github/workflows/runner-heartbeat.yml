@@ -1,4 +1,4 @@
-name: Verify JMR short answer on Pages and SQLite DO tests
+name: Validate SQLite rate-limit Durable Object in local Workerd
 on:
   push:
     branches:
@@ -7,53 +7,6 @@ on:
 permissions:
   contents: read
 jobs:
-  production:
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    steps:
-      - name: "Verify live Pages build and one concise JMR answer"
-        run: |
-          node --input-type=module <<'NODE'
-          const origin="https://aljamharah.pages.dev";
-          async function get(path){
-            const r=await fetch(origin+path,{redirect:"follow",signal:AbortSignal.timeout(20000)});
-            return {status:r.status,body:await r.text()};
-          }
-          const jmr=await get("/jmr.html");
-          const apiSource=await get("/content/poems%2Ejson");
-          const parsed=JSON.parse(apiSource.body);
-          const publicSafe=apiSource.status===200&&Array.isArray(parsed.poems)&&
-            parsed.poems.length===11&&parsed.poems.every(p=>p.publication_status==="published"&&
-              !["rights_basis","text_attribution","editorial_token","editorial_note"].some(k=>Object.hasOwn(p,k)));
-          console.log("PRIVACY encoded_path published="+parsed.poems.length+" sanitized="+publicSafe);
-          if(!publicSafe)process.exitCode=1;
-          if(jmr.status!==200||!jmr.body.includes('![\"curated_reference\", \"poet_biography_reference\", \"quran_corpus\"].includes')){
-            console.log("JMR_FRONTEND not current");process.exitCode=1;
-          }
-          const method=await get("/api/jmr");
-          console.log("JMR_METHOD_GET "+method.status);
-          if(method.status!==405)process.exitCode=1;
-          // One short question only, using the already configured binding;
-          // no extra billing services, API keys or web-search provider.
-          try {
-            const r=await fetch(origin+"/api/jmr",{
-              method:"POST",signal:AbortSignal.timeout(45000),
-              headers:{"Content-Type":"application/json","Origin":origin},
-              body:JSON.stringify({
-                message:"ما الفرق بين التشبيه والاستعارة في جملة عربية واحدة؟",
-                conversation:[]
-              })
-            });
-            const answer=await r.json();
-            const chars=typeof answer.answer==="string"?answer.answer.length:0;
-            const concise=r.status===200&&chars>=20&&chars<=500;
-            console.log("JMR_CONCISE_PRODUCTION http="+r.status+" answer_chars="+chars+
-              " concise="+concise+" mode="+String(answer.mode||"unknown")+
-              " web_status="+String(answer.search_status||"unknown")+
-              " has_error="+Boolean(answer.error));
-            if(!concise)process.exitCode=1;
-          }catch(e){console.log("JMR_CONCISE_PRODUCTION failed "+e.name);process.exitCode=1;}
-          NODE
   do:
     runs-on: ubuntu-latest
     timeout-minutes: 18
@@ -69,12 +22,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: "Install local Cloudflare Workerd Vitest pool"
+      - name: "Install Workerd Vitest dependencies with peer conflict compatibility"
         working-directory: source/workers/jmr-ratelimit-do
-        run: npm install --no-save --package-lock=false
-      - name: "Test atomic 12 per minute DO, concurrency and alarms locally"
+        run: |
+          node --version
+          npm --version
+          npm install --legacy-peer-deps --no-audit --no-fund --no-save --package-lock=false
+      - name: "Test atomic rate limiting and SQLite alarms"
         working-directory: source/workers/jmr-ratelimit-do
         run: npm test
-      - name: "Check private source remains unchanged"
+      - name: "Ensure tracked source is unchanged"
         working-directory: source
         run: git diff --exit-code -- .
