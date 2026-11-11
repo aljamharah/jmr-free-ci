@@ -1,0 +1,116 @@
+name: Jamharah and JMR stable free release gate
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/production-release-gate.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: "Checkout current private production source read-only"
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: main
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: "Run complete safe-build and JMR API foundation"
+        working-directory: source
+        run: node scripts/check_site_foundation.mjs
+      - name: "Verify JMR evaluation dry run only"
+        working-directory: source
+        run: node scripts/evaluate_jmr_preview.mjs --dry-run --limit 2
+      - name: "Install free local Chromium testing package"
+        working-directory: source
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            npx playwright install --with-deps chromium
+          fi
+      - name: "Run browser tests for ten published pages and JMR UI"
+        working-directory: source
+        run: node scripts/test_browser_navigation.mjs
+      - name: "Ensure private source is unchanged"
+        working-directory: source
+        run: git diff --exit-code -- .
+  durable-object:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: "Checkout current private Durable Object implementation read-only"
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: main
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: "Install local Cloudflare Workerd test pool without paid services"
+        working-directory: source/workers/jmr-ratelimit-do
+        run: npm install --legacy-peer-deps --no-audit --no-fund --no-save --package-lock=false
+      - name: "Test atomic 12/13 throttling, concurrency and expiry"
+        working-directory: source/workers/jmr-ratelimit-do
+        run: npm test
+      - name: "Check private source is unchanged"
+        working-directory: source
+        run: git diff --exit-code -- .
+  production-public-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: "Read only production GET security and release smoke test"
+        run: |
+          node --input-type=module <<'NODE'
+          const base="https://aljamharah.pages.dev";
+          async function get(path) {
+            const r=await fetch(base+path,{redirect:"follow",signal:AbortSignal.timeout(20000)});
+            return {status:r.status,body:await r.text()};
+          }
+          const markers={
+            "/index.html":["lexicon.html?q="],
+            "/catalog.html":["lexicon.html#wordSearch"],
+            "/lexicon.html":['new URLSearchParams(window.location.search).get("q")'],
+            "/library.html":["booksLoadFailure"],
+            "/book.html":['rel="stylesheet"><style>'],
+            "/reader.html":['rel="stylesheet"><style>'],
+            "/poets.html":['id="searchButton"'],
+            "/poet.html":['id="searchButton"'],
+            "/poem.html":['id="searchButton"'],
+            "/jmr.html":['!["curated_reference", "poet_biography_reference", "quran_corpus"].includes']
+          };
+          let passed=0;
+          for(const [path,tokens] of Object.entries(markers)){
+            const r=await get(path);
+            const ok=r.status===200&&tokens.every(x=>r.body.includes(x));
+            console.log("PUBLIC_PAGE "+path+" ok="+ok);
+            if(!ok)process.exitCode=1;
+            else passed++;
+          }
+          for(const path of ["/content/poems.json","/content/poems%2Ejson"]){
+            const r=await get(path);
+            const data=r.status===200?JSON.parse(r.body):null;
+            const safe=r.status===403||r.status===404||
+              (r.status===200&&Array.isArray(data?.poems)&&data.poems.length>0&&
+                data.poems.every(x=>x.publication_status==="published"&&
+                  !["rights_basis","text_attribution","editorial_note","editorial_token"].some(k=>Object.hasOwn(x,k))));
+            console.log("PUBLIC_PRIVACY "+path+" safe="+safe);
+            if(!safe)process.exitCode=1;
+          }
+          const api=await get("/api/jmr");
+          console.log("PUBLIC_API_GET 405="+(api.status===405));
+          if(api.status!==405)process.exitCode=1;
+          console.log("PUBLIC_RELEASE_GATE pages="+passed+"/"+Object.keys(markers).length+
+            " no_paid_model_calls=true");
+          NODE
