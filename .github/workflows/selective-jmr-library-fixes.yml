@@ -37,7 +37,7 @@ jobs:
           if ! command -v google-chrome >/dev/null 2>&1; then
             npx playwright install --with-deps chromium
           fi
-      - name: Browser test: navigation and synthetic book loading failures
+      - name: "Browser test: navigation and synthetic book loading failures"
         working-directory: source
         run: node scripts/test_browser_navigation.mjs
       - name: Ensure source tracked files untouched by tests
