@@ -69,6 +69,9 @@ jobs:
         run: |
           npm install --no-save --package-lock=false --no-audit --no-fund playwright@1.56.1
           if ! command -v google-chrome >/dev/null 2>&1; then npx playwright install --with-deps chromium; fi
+      - name: Build sanitized local browser fixture
+        working-directory: source
+        run: node scripts/build_public_site.mjs
       - name: Run mobile, desktop and JMR UI Chromium tests
         working-directory: source
         run: node scripts/test_browser_navigation.mjs
