@@ -1,4 +1,4 @@
-name: Diagnose free GitHub Actions runner assignment
+name: Diagnose runner and validate JMR consolidated branch
 on:
   push:
     branches:
@@ -9,9 +9,37 @@ permissions:
 jobs:
   heartbeat:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 20
     steps:
       - name: Minimal runner heartbeat
+        run: echo "runner-initialized"
+      - name: Checkout private branch read only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: engineering/jmr-library-selective-fixes-2026-11-11
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Full technical foundation and 17 JMR error paths
+        working-directory: source
+        run: node scripts/check_site_foundation.mjs
+      - name: Validate offline JMR evaluation dry run
+        working-directory: source
+        run: node scripts/evaluate_jmr_preview.mjs --dry-run --limit 2
+      - name: Install headless Chromium runner
+        working-directory: source
         run: |
-          echo "runner-initialized"
-          echo "runner=${{ runner.os }}"
+          npm install --no-save --package-lock=false playwright@1.56.1
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            npx playwright install --with-deps chromium
+          fi
+      - name: Browser tests: all pages, JMR grouped sources and library errors
+        working-directory: source
+        run: node scripts/test_browser_navigation.mjs
+      - name: Confirm source tree remains unchanged
+        working-directory: source
+        run: git diff --exit-code -- .
