@@ -51,6 +51,9 @@ jobs:
       - name: Check fast lexicon shards and browser script syntax
         working-directory: source
         run: node scripts/test_lexicon_fast_search.mjs
+      - name: Ensure draft poems stay private
+        working-directory: source
+        run: node --test tests/poems-privacy.test.mjs
       - name: Validate Quran text and attribution
         working-directory: source
         run: node scripts/validate_jmr_quran.mjs
