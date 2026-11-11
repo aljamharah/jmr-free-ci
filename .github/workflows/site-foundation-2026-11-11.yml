@@ -1,0 +1,35 @@
+name: Validate Jamharah engineering foundation PR 46
+
+on:
+  push:
+    branches: [ci/site-foundation-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout engineering branch read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: engineering/technical-foundation-masterplan-2026-11-11
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - name: Install Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run site and JMR baseline checks
+        working-directory: source
+        run: node scripts/check_site_foundation.mjs
+      - name: Assert no source modifications from tests
+        working-directory: source
+        run: |
+          git diff --exit-code -- .
+          git status --short
