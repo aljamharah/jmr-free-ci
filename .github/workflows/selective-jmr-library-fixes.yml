@@ -1,0 +1,45 @@
+name: Validate selective JMR and Library legacy fixes safely
+
+on:
+  push:
+    branches: [ci/jmr-library-consolidation-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout private engineering branch read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: engineering/jmr-library-selective-fixes-2026-11-11
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate build, lexicon, JMR API and all unit tests
+        working-directory: source
+        run: node scripts/check_site_foundation.mjs
+      - name: Validate JMR evaluation CLI dry run only (no network or model)
+        working-directory: source
+        run: node scripts/evaluate_jmr_preview.mjs --dry-run --limit 2
+      - name: Install free headless browser
+        working-directory: source
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            npx playwright install --with-deps chromium
+          fi
+      - name: Browser test: navigation and synthetic book loading failures
+        working-directory: source
+        run: node scripts/test_browser_navigation.mjs
+      - name: Ensure source tracked files untouched by tests
+        working-directory: source
+        run: git diff --exit-code -- .
