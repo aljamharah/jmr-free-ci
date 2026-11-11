@@ -18,7 +18,7 @@ jobs:
         with:
           repository: aljamharah/aljamharah
           ref: engineering/header-nav-contract-2026-11-11
-          token: \${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: source
           persist-credentials: false
       - name: Install Node 22
