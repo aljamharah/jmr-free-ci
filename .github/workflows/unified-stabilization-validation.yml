@@ -54,6 +54,9 @@ jobs:
       - name: Ensure draft poems stay private
         working-directory: source
         run: node --test tests/poems-privacy.test.mjs
+      - name: Audit internal links and preserved assets
+        working-directory: source
+        run: node scripts/audit_site_links.mjs
       - name: Validate Quran text and attribution
         working-directory: source
         run: node scripts/validate_jmr_quran.mjs
@@ -74,3 +77,6 @@ jobs:
       - name: Check poet indexing from source
         working-directory: source
         run: python -m unittest discover -s tests -p 'test_jmr_poets_index.py'
+      - name: Validate evaluation suite without calling AI
+        working-directory: source
+        run: node scripts/evaluate_jmr_preview.mjs --dry-run --suite generative-smoke
