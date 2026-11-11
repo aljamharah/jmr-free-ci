@@ -1,0 +1,54 @@
+name: Summarize historical raw poems data exposure without logging content
+
+on:
+  push:
+    branches: [ci/historical-poems-exposure-summary-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: befc0219553e9c1250ce7ae8b311e44160b2249b
+          fetch-depth: 0
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Summarize privacy-relevant fields across all revisions (read-only)
+        working-directory: source
+        run: |
+          node --input-type=module <<'NODE'
+          import {execFileSync} from "node:child_process";
+          import {createHash} from "node:crypto";
+          const shas=execFileSync("git",["log","--all","--format=%H","--","content/poems.json"],{encoding:"utf8",maxBuffer:20e6}).trim().split("\n").filter(Boolean);
+          const versions=new Map();
+          for(const sha of shas){
+            let raw;try{raw=execFileSync("git",["show",sha+":content/poems.json"],{maxBuffer:30e6})}catch{continue}
+            const contentHash=createHash("sha256").update(raw).digest("hex");
+            if(versions.has(contentHash))continue;
+            const parsed=JSON.parse(raw.toString("utf8"));
+            if(!Array.isArray(parsed.poems)) throw Error("Unexpected poems schema");
+            const unpublished=parsed.poems.filter(p=>p.publication_status!=="published").length;
+            const editorial=parsed.poems.filter(p=>Object.hasOwn(p,"rights_basis")||Object.hasOwn(p,"text_attribution")||Object.hasOwn(p,"editorial_note")||Object.hasOwn(p,"editorial_token")).length;
+            versions.set(contentHash,{commit:sha,poem_records:parsed.poems.length,unpublished_records:unpublished,editorial_records:editorial});
+          }
+          let countDrafts=0, countEditorial=0;
+          for(const v of versions.values()){
+            countDrafts+=v.unpublished_records>0?1:0;
+            countEditorial+=v.editorial_records>0?1:0;
+            console.log("REVISION "+v.commit.slice(0,12)+" unpublished_record_count="+v.unpublished_records+" records_with_editorial_fields="+v.editorial_records+" total_records="+v.poem_records);
+          }
+          console.log("SUMMARY unique_raw_versions="+versions.size+" versions_with_unpublished_records="+countDrafts+" versions_with_editorial_fields="+countEditorial);
+          if(versions.size===0||countEditorial!==versions.size) throw Error("Some historical raw versions lack editorial fields; inspect manually.");
+          console.log("SUCCESS: all historical raw file revisions carry editorial-only fields; deploy only sanitized dist.");
+          NODE
