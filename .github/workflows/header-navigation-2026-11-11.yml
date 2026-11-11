@@ -1,0 +1,53 @@
+name: Validate homepage-anchored Jamharah header and navigation PR 48
+
+on:
+  push:
+    branches: [ci/header-navigation-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  header-navigation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Checkout Jamharah header branch read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: engineering/header-nav-contract-2026-11-11
+          token: \${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - name: Install Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Header identity and search navigation contract
+        working-directory: source
+        run: node scripts/test_header_navigation_contract.mjs
+      - name: Internal page/asset reference integrity
+        working-directory: source
+        run: node scripts/audit_site_links.mjs
+      - name: Public dist build and editorial privacy regression
+        working-directory: source
+        run: node scripts/test_public_site_build.mjs
+      - name: Lexicon fast retrieval regression
+        working-directory: source
+        run: node scripts/test_lexicon_fast_search.mjs
+      - name: Quran corpus safety
+        working-directory: source
+        run: node scripts/validate_jmr_quran.mjs
+      - name: JMR API and runtime tests
+        working-directory: source
+        run: |
+          node scripts/test_jmr_api.mjs
+          node scripts/test_jmr_runtime.mjs
+      - name: All Node unit tests
+        working-directory: source
+        run: node --test
+      - name: Ensure tests didn't alter tracked source
+        working-directory: source
+        run: git diff --exit-code -- .
