@@ -37,7 +37,7 @@ jobs:
           if ! command -v google-chrome >/dev/null 2>&1; then
             npx playwright install --with-deps chromium
           fi
-      - name: Browser tests: all pages, JMR grouped sources and library errors
+      - name: "Browser tests: all pages, JMR grouped sources and library errors"
         working-directory: source
         run: node scripts/test_browser_navigation.mjs
       - name: Confirm source tree remains unchanged
