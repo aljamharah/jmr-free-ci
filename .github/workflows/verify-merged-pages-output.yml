@@ -1,0 +1,76 @@
+name: Verify merged safe Pages build and public deployment
+on:
+  push:
+    branches: [ci/verify-merged-pages-build-2026-11-11]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  merged-source-build:
+    if: github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout private main read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: e7a7554602d2da4a4c3058760ca008f3cce53fee
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify build and fail-open static fallback protection
+        working-directory: source
+        run: |
+          node scripts/test_public_site_build.mjs
+          node scripts/build_public_site.mjs
+      - name: Verify published files and functions remain separated
+        working-directory: source
+        run: |
+          test -f dist/index.html
+          test -f dist/jmr.html
+          test -f dist/poet.html
+          test -f dist/lexicon.html
+          test -f dist/assets/jamharah-header.css
+          test -f dist/assets/jamharah-subpage-header.css
+          test -f dist/assets/jamharah-subpage-header.js
+          test -f functions/api/jmr.js
+          test -f functions/content/poems.json.js
+          test ! -e dist/functions/api/jmr.js
+          test ! -e dist/content/books/books
+          test ! -e dist/scripts
+          test ! -e dist/database
+  production-route-safety:
+    if: github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check whether live Pages still exposes editorial source through encoded path
+        run: |
+          node --input-type=module <<'NODE'
+          for (const path of ["/content/poems.json", "/content/%70oems.json"]) {
+            const url = "https://aljamharah.pages.dev" + path;
+            const res = await fetch(url, {signal: AbortSignal.timeout(20000)});
+            let unsafe=false, count=0;
+            if (res.ok) {
+              const body = await res.json();
+              if (!body || !Array.isArray(body.poems)) {
+                throw new Error("Unexpected JSON shape on public poetry route");
+              }
+              count=body.poems.length;
+              unsafe=body.poems.some(x => x.publication_status !== "published" ||
+                "rights_basis" in x || "text_attribution" in x);
+            }
+            console.log("Route " + path + " HTTP " + res.status +
+              ", records " + count + ", private fields/drafts " + (unsafe ? "PRESENT" : "not observed"));
+            if (unsafe) {
+              throw new Error("SECURITY: Cloudflare still serving editorial data. Set Pages build output to dist.");
+            }
+            if (!res.ok && res.status !== 404) {
+              throw new Error("Could not verify production route: HTTP " + res.status);
+            }
+          }
+          NODE
