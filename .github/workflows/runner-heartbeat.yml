@@ -1,0 +1,17 @@
+name: Diagnose free GitHub Actions runner assignment
+on:
+  push:
+    branches:
+      - diagnostics/actions-runner-availability-2026-11-11
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Minimal runner heartbeat
+        run: |
+          echo "runner-initialized"
+          echo "runner=${{ runner.os }}"
