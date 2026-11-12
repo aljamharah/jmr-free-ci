@@ -1,0 +1,42 @@
+name: Verify Cloudflare production matches GitHub main (GET only)
+
+# Intended as a zero-cost, manually repeatable check. No API writes.
+on:
+  push:
+    branches:
+      - ci/cloudflare-git-sync-readonly-2026-11-12
+    paths:
+      - scripts/production_git_sync_audit.mjs
+      - tests/production-git-sync-audit.test.mjs
+      - .github/workflows/cloudflare-git-sync-readonly.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production-main-sync-readonly
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.actor == 'aljamharah' && github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout audit harness (no persistent GitHub token)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Offline tests and syntax validation before using secrets
+        run: |
+          node --check scripts/production_git_sync_audit.mjs
+          node --test tests/production-git-sync-audit.test.mjs
+
+      - name: Verify latest Pages production deployment against canonical private main (GET only)
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          ALJAMHARAH_CF_READ_TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+          JMR_PRIVATE_REPO_READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: node scripts/production_git_sync_audit.mjs
