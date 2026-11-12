@@ -1,0 +1,44 @@
+name: Verify J-08 detail page controls and J-01 remain live
+on:
+  push:
+    branches: [ci/j08-detail-live-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify mobile detail controls on the live production site
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://aljamharah.pages.dev';
+          const expectations=[
+            ['poet.html','.back{display:inline-flex;align-items:center;min-height:44px;','.back:focus-visible'],
+            ['poem.html','.poem-controls .action{display:inline-flex;','.back{display:inline-flex;align-items:center;min-height:44px;'],
+            ['book.html','.back-link{display:inline-flex;align-items:center;min-height:44px;','jamharah-library-navigation.js'],
+            ['reader.html','.back-link{display:inline-flex;align-items:center;min-height:44px;','jamharah-library-navigation.js']
+          ];
+          let complete=false;
+          for(let attempt=0;attempt<18;attempt++){
+            let ok=0;
+            for(const [path,first,second] of expectations){
+              const response=await fetch(base+'/'+path,{headers:{'Cache-Control':'no-cache'},signal:AbortSignal.timeout(12000)});
+              const html=await response.text();
+              if(response.status===200&&html.includes(first)&&html.includes(second)&&
+                (path!=='poem.html'||html.includes('min-height:44px;white-space:nowrap')))ok++;
+            }
+            complete=ok===expectations.length;
+            console.log('J08_LIVE_DETAIL_TAP_AREAS',JSON.stringify({attempt:attempt+1,passed:ok,total:expectations.length}));
+            if(complete)break;
+            await new Promise(r=>setTimeout(r,6000));
+          }
+          const home=await fetch(base+'/',{signal:AbortSignal.timeout(12000)});
+          const index=await fetch(base+'/content/jmr/lexicon/meaning/manifest.json',{signal:AbortSignal.timeout(12000)});
+          const m=index.status===200?await index.json():null;
+          const kept=Boolean(m?.source_text_pages_included===false&&m?.entry_count===20738);
+          console.log('J08_HOME',home.status);
+          console.log('J08_J01_LIGHT_INDEX_STILL_PRESENT',kept);
+          console.log('J08_MOBILE_DETAIL_DEPLOYED',complete?'PASS':'NOT_VERIFIED');
+          if(!complete||home.status!==200||!kept)process.exitCode=1;
+          NODE
