@@ -1,0 +1,57 @@
+name: Verify merged JMR long-chat social reply release on Production
+on:
+  push:
+    branches: [ci/jmr-social-r3-live-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Verify deployed social r3 Worker and UI with zero inference calls
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://aljamharah.pages.dev';
+          const release='natural-replies-r3';
+          let success=false;
+          for(let attempt=1;attempt<=22;attempt++){
+            try{
+              const [api,ui]=await Promise.all([
+                fetch(base+'/api/jmr',{method:'GET',headers:{'Cache-Control':'no-cache'},signal:AbortSignal.timeout(12000)}),
+                fetch(base+'/jmr.html',{headers:{'Cache-Control':'no-cache'},signal:AbortSignal.timeout(12000)})
+              ]);
+              const [json,html]=await Promise.all([api.json().catch(()=>null),ui.text()]);
+              const marker=api.headers.get('X-JMR-Social-Release');
+              const uiOK=ui.status===200 && html.includes('used_social_reply_keys') &&
+                html.includes('usedSocialReplyKeys.clear()') && html.includes('id="sendButton"');
+              success=api.status===405&&json?.error==='الطريقة غير مسموحة.'&&
+                marker===release&&uiOK;
+              console.log('JMR_SOCIAL_R3_PRODUCTION',JSON.stringify({
+                attempt,success,apiStatus:api.status,marker:marker||null,
+                uiStatus:ui.status,uiReady:uiOK
+              }));
+              if(success)break;
+            }catch(err){console.log('JMR_SOCIAL_R3_RETRY',JSON.stringify({
+              attempt,error:String(err).slice(0,160)
+            }))}
+            await new Promise(resolve=>setTimeout(resolve,6500));
+          }
+          if(success){
+            const r=await fetch(base+'/api/jmr',{
+              method:'POST',headers:{Origin:base,'Content-Type':'application/json'},
+              body:'{',
+              signal:AbortSignal.timeout(12000)
+            });
+            const body=await r.json().catch(()=>null);
+            success=r.status===400 &&
+              body?.error==='تعذر قراءة بيانات الطلب.' &&
+              r.headers.get('X-JMR-Social-Release')===release;
+            console.log('JMR_SOCIAL_R3_POST_GUARD',JSON.stringify({
+              success,status:r.status,release:r.headers.get('X-JMR-Social-Release')
+            }));
+          }
+          console.log('JMR_SOCIAL_R3_DEPLOYED',success?'VERIFIED':'NOT_VERIFIED');
+          console.log('REAL_AI_INFERENCE_CALLS',0);
+          if(!success)process.exitCode=1;
+          NODE
