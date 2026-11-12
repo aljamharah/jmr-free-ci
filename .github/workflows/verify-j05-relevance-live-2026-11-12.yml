@@ -1,0 +1,50 @@
+name: Verify J-05 relevance and consistent search headers on live Production
+on:
+  push:
+    branches: [ci/j05-relevance-live-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Verify merged search code and all ordinary header destinations
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://aljamharah.pages.dev';
+          const requirements=[
+            ['assets/jamharah-unified-search.mjs','publicPoetNames=new Map','["poets","poems","books"].flatMap'],
+            ['assets/jamharah-unified-search-ui.mjs','url.set("type",filter.value)','allowedTypes.has(initialType)'],
+            ['assets/jamharah-subpage-header.js','getElementById("unifiedQuery")','window.location.assign("search.html")'],
+            ['index.html','window.location.assign("search.html")','id="searchForm"'],
+            ['catalog.html','window.location.assign("search.html")','id="searchButton"'],
+            ['lexicon.html','window.location.assign("search.html")','id="lexiconSearchForm"'],
+            ['library.html','window.location.assign("search.html")','id="searchInput"'],
+            ['book.html','location.href="search.html"','id="searchButton"'],
+            ['reader.html','location.href="search.html"','id="searchButton"'],
+            ['search.html','id="unifiedForm"','jamharah-unified-search-ui.mjs']
+          ];
+          let succeeded=false;
+          for(let attempt=0;attempt<18;attempt++){
+            let count=0;
+            for(const [path,a,b] of requirements){
+              const resp=await fetch(base+'/'+path,{
+                headers:{'Cache-Control':'no-cache'},signal:AbortSignal.timeout(12000)
+              });
+              const body=await resp.text();
+              if(resp.status===200&&body.includes(a)&&body.includes(b))count++;
+            }
+            console.log('J05_RELEVANCE_PRODUCTION_CHECK',JSON.stringify({attempt:attempt+1,passed:count,total:requirements.length}));
+            succeeded=count===requirements.length;
+            if(succeeded)break;
+            await new Promise(resolve=>setTimeout(resolve,6000));
+          }
+          const home=await fetch(base+'/',{signal:AbortSignal.timeout(12000)});
+          const lexicon=await fetch(base+'/content/jmr/lexicon/manifest.json',{signal:AbortSignal.timeout(12000)});
+          const count=lexicon.ok?(await lexicon.json()).entry_count:null;
+          console.log('J05_HOME',home.status);
+          console.log('J05_LEXICON_ENTRY_COUNT',count);
+          console.log('J05_HEADER_AND_RELEVANCE_DEPLOYED',succeeded?'PASS':'NOT_VERIFIED');
+          if(!succeeded||home.status!==200||count!==20738)process.exitCode=1;
+          NODE
