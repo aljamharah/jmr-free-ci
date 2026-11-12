@@ -1,0 +1,44 @@
+name: JMR attribution structural preflight and runtime revision
+on:
+  push:
+    branches: [ci/jmr-attribution-runtime-revision-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  attribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: quality/jmr-production-revision-attribution-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Attribution review states, runtime header and Quran isolation
+        run: |
+          node scripts/test_jmr_attribution_revision.mjs
+          node scripts/test_jmr_retrieval_benchmark.mjs
+          node scripts/test_jmr_public_search.mjs
+      - name: Existing JMR API, runtime, Quran tests
+        run: |
+          node scripts/test_jmr_api.mjs
+          node scripts/test_jmr_runtime.mjs
+          node scripts/test_jmr_failure_paths.mjs
+          node scripts/validate_jmr_quran.mjs
+      - name: Local Cloudflare Functions compilation, no deployment
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          npm install --no-save --no-audit --no-fund wrangler@4
+          npx wrangler pages functions build functions --outdir /tmp/jmr-version-build --compatibility-date 2026-11-12
+          grep -q 'jmr-retrieval-2026-11-12-dedup-r1' /tmp/jmr-version-build/index.js
+      - name: Safe site build with no unpublished files
+        run: |
+          node scripts/build_public_site.mjs
+          node scripts/test_public_site_build.mjs
+          test ! -d dist/scripts
+          test ! -d dist/database
+          test ! -d dist/tests
