@@ -1,0 +1,36 @@
+name: J-05 relevance fairness and unified header browser verification
+on:
+  push:
+    branches: [ci/j05-relevance-header-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: fix/j05-search-relevance-and-header-parity-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Search relevance, privacy, category fairness and unified header tests
+        run: node --test tests/j05-unified-search.test.mjs tests/j05-search-relevance-and-header-parity.test.mjs
+      - name: Build the existing sanitized public Pages bundle
+        run: node scripts/build_public_site.mjs
+      - name: Audit public output privacy and static navigation
+        run: |
+          node scripts/test_public_site_build.mjs
+          node scripts/audit_site_links.mjs
+          test ! -d dist/database
+          test ! -d dist/scripts
+          test ! -d dist/tests
+      - name: Install temporary free Chromium for phone/desktop regression
+        run: |
+          npm install --no-save --no-audit --no-fund playwright
+          npx playwright install chromium
+      - name: Test actual unified search, book filters, header navigation and JMR mocks
+        run: node scripts/test_browser_navigation.mjs
