@@ -1,0 +1,29 @@
+name: J-08 actual browser mobile and desktop navigation regression
+on:
+  push:
+    branches: [ci/j08-browser-regression-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  mobile-desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: main
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser test runtime only on ephemeral free CI runner
+        run: |
+          npm install --no-save --no-audit --no-fund playwright
+          npx playwright install chromium
+      - name: Build the sanitized public site
+        run: node scripts/build_public_site.mjs
+      - name: Real browser test across phone and desktop viewports
+        run: node scripts/test_browser_navigation.mjs
+      - name: Verify internal links after browser test
+        run: node scripts/audit_site_links.mjs
