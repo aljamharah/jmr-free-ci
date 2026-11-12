@@ -1,0 +1,55 @@
+name: Verify deployed JMR published search links and safe API health
+on:
+  push:
+    branches: [ci/jmr-j05-live-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check live JMR UI, public search and non-inference API guards
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://aljamharah.pages.dev';
+          const get=async path=>{
+            const response=await fetch(base+path,{headers:{'Cache-Control':'no-cache'},signal:AbortSignal.timeout(12000)});
+            return {status:response.status,text:await response.text()};
+          };
+          let ready=false;
+          for(let attempt=0;attempt<18;attempt++){
+            const [jmr,search,home,engine]=await Promise.all([
+              get('/jmr.html'),get('/search.html'),get('/'),
+              get('/assets/jamharah-unified-search.mjs')
+            ]);
+            ready=jmr.status===200&&
+              jmr.text.includes('صفحات منشورة ذات صلة في الجمهرة')&&
+              jmr.text.includes('ليس توثيقاً للنسبة')&&
+              search.status===200&&search.text.includes('id="unifiedForm"')&&
+              home.status===200&&engine.status===200;
+            console.log('JMR_J05_LIVE_STATIC',JSON.stringify({
+              attempt:attempt+1,ready,jmr:jmr.status,search:search.status,home:home.status
+            }));
+            if(ready)break;
+            await new Promise(resolve=>setTimeout(resolve,6000));
+          }
+          const method=await fetch(base+'/api/jmr',{
+            method:'GET',signal:AbortSignal.timeout(12000)
+          });
+          const methodJson=await method.json().catch(()=>null);
+          console.log('JMR_LIVE_METHOD_GUARD',JSON.stringify({status:method.status,error:methodJson?.error}));
+          // One invalid-JSON request exercises binding/rate-limit/JSON parsing, never AI inference.
+          const bad=await fetch(base+'/api/jmr',{
+            method:'POST',headers:{'Content-Type':'application/json',
+             'Origin':base},
+            body:'{',
+            signal:AbortSignal.timeout(12000)
+          });
+          const badJson=await bad.json().catch(()=>null);
+          console.log('JMR_LIVE_INVALID_JSON',JSON.stringify({status:bad.status,error:badJson?.error}));
+          const ok=ready&&method.status===405&&methodJson?.error==='الطريقة غير مسموحة.'&&
+            bad.status===400&&badJson?.error==='تعذر قراءة بيانات الطلب.';
+          console.log('JMR_J05_SAFE_HEALTH',ok?'PASS':'NOT_VERIFIED');
+          if(!ok)process.exitCode=1;
+          NODE
