@@ -1,0 +1,104 @@
+name: Cloudflare connection audit (read only)
+
+# Initial test uses HTTP GET only; never deploys, edits, or deletes Cloudflare resources.
+on:
+  push:
+    branches: [ops/cloudflare-connection-2026-11-12]
+    paths: [.github/workflows/cloudflare-connect-readonly.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-connection-audit
+  cancel-in-progress: true
+
+jobs:
+  connectivity:
+    if: github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      CF_TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+      CF_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Verify token and locate aljamharah Pages project (GET only)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+          from urllib.parse import quote
+
+          token = os.environ.get("CF_TOKEN", "").strip()
+          account = os.environ.get("CF_ACCOUNT_ID", "").strip()
+          if not token:
+              sys.exit("Missing repository Actions secret ALJAMHARAH_CF_MAINTENANCE_TOKEN.")
+
+          def get(path):
+              req = Request("https://api.cloudflare.com/client/v4/" + path,
+                            headers={"Authorization": "Bearer " + token, "Accept": "application/json"},
+                            method="GET")
+              try:
+                  with urlopen(req, timeout=15) as response:
+                      data = json.load(response)
+              except HTTPError as exc:
+                  raise RuntimeError("Cloudflare API HTTP " + str(exc.code)) from None
+              except (URLError, TimeoutError):
+                  raise RuntimeError("Cloudflare API unavailable or timed out") from None
+              if not isinstance(data, dict) or data.get("success") is not True:
+                  raise RuntimeError("Cloudflare rejected the request; verify token scope")
+              return data
+
+          try:
+              verified = get("user/tokens/verify")
+              if verified.get("result", {}).get("status") != "active":
+                  raise RuntimeError("Cloudflare token is not active")
+              print("Token verification: PASS (secret not printed)")
+
+              project = None
+              if account:
+                  project = get("accounts/" + quote(account, safe="") + "/pages/projects/aljamharah").get("result")
+              else:
+                  # Discover the account ID only if account listing is allowed by this token.
+                  for page in range(1, 11):
+                      listing = get("accounts?per_page=50&page=" + str(page))
+                      records = listing.get("result") or []
+                      if not isinstance(records, list):
+                          raise RuntimeError("Unexpected account list response")
+                      for record in records:
+                          candidate = record.get("id")
+                          if not candidate:
+                              continue
+                          try:
+                              found = get("accounts/" + quote(candidate, safe="") + "/pages/projects/aljamharah").get("result")
+                          except RuntimeError:
+                              continue
+                          if isinstance(found, dict) and found.get("name") == "aljamharah":
+                              account, project = candidate, found
+                              break
+                      if account:
+                          break
+                      if page >= int((listing.get("result_info") or {}).get("total_pages") or 1):
+                          break
+
+              if not isinstance(project, dict) or project.get("name") != "aljamharah":
+                  raise RuntimeError("Project not found; set GitHub repository Actions variable CLOUDFLARE_ACCOUNT_ID.")
+
+              latest = get("accounts/" + quote(account, safe="") +
+                           "/pages/projects/aljamharah/deployments?per_page=1&page=1").get("result")
+              if not isinstance(latest, list):
+                  raise RuntimeError("Unexpected deployments response")
+              print("Aljamharah Pages: FOUND")
+              print("Deployment API: ACCESSIBLE")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fp:
+                  fp.write("## Read-only Cloudflare connectivity\n\n"
+                           "- Token: active (never displayed)\n"
+                           "- Pages project: aljamharah found\n"
+                           "- Deployment endpoint: accessible\n"
+                           "- No Cloudflare writes, deployments, or deletes performed.\n")
+          except RuntimeError as exc:
+              sys.exit("Connection test failed: " + str(exc))
+          PY
