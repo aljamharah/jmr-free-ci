@@ -1,0 +1,49 @@
+name: JMR retrieval relevance and source-dedup quality
+on:
+  push:
+    branches: [ci/jmr-retrieval-quality-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  retrieval-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: quality/jmr-retrieval-benchmark-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Measure actual literary query quality, duplicate suppression, draft safety
+        run: |
+          node scripts/test_jmr_retrieval_benchmark.mjs
+          node scripts/test_jmr_public_search.mjs
+      - name: Run existing JMR and Quran regression coverage
+        run: |
+          node scripts/test_jmr_api.mjs
+          node scripts/test_jmr_runtime.mjs
+          node scripts/test_jmr_failure_paths.mjs
+          node scripts/validate_jmr_quran.mjs
+      - name: Compile Cloudflare Pages Functions locally without deployment or paid inference
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          npm install --no-save --no-audit --no-fund wrangler@4
+          npx wrangler pages functions build functions --outdir /tmp/jmr-quality-bundle --compatibility-date 2026-11-12
+          test -f /tmp/jmr-quality-bundle/index.js
+      - name: Verify sanitized public build and links
+        run: |
+          node scripts/build_public_site.mjs
+          node scripts/test_public_site_build.mjs
+          node scripts/audit_site_links.mjs
+          test ! -d dist/database
+          test ! -d dist/scripts
+      - name: Temporary free Chromium for phone and desktop UI
+        run: |
+          npm install --no-save --no-audit --no-fund playwright
+          npx playwright install chromium
+      - name: Run actual browser regression
+        run: node scripts/test_browser_navigation.mjs
