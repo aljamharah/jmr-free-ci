@@ -1,0 +1,33 @@
+name: Verify J-06 section navigation on live Production
+on:
+  push:
+    branches: [ci/j06-live-routes-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify deployed navigation without inference or writes
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://aljamharah.pages.dev';
+          let ready=false;
+          for(let attempt=0;attempt<15;attempt++){
+            const response=await fetch(base+'/catalog.html?group=community',{
+              headers:{'Cache-Control':'no-cache'},
+              signal:AbortSignal.timeout(15000)
+            });
+            const html=await response.text();
+            const hasHandler=html.includes('function renderDeferredSection(key)');
+            const hasDispatch=html.includes('Object.hasOwn(deferredSections,groupKey)');
+            ready=response.status===200 && hasHandler && hasDispatch;
+            if(ready) break;
+            await new Promise(r=>setTimeout(r,8000));
+          }
+          console.log('J06_PRODUCTION_SECTION_ROUTES',ready?'PASS':'NOT_YET_DEPLOYED');
+          const home=await fetch(base+'/',{signal:AbortSignal.timeout(15000)});
+          console.log('J06_PRODUCTION_HOME',home.status);
+          if(!ready || home.status!==200) process.exitCode=1;
+          NODE
