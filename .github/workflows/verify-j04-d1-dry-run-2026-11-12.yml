@@ -1,0 +1,29 @@
+name: J-04 read-only D1 schema and JSON migration dry-run
+on:
+  push:
+    branches: [ci/j04-d1-dry-run-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  j04-dryrun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: j04/d1-dry-run-parity-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - name: Validate SQL proposal, rights and relationship safeguards in temporary memory
+        run: python3 -m unittest discover -s tests -p 'test_j04_d1_dry_run.py' -v
+      - name: Inspect all ten original lexicon shards and dry-run all public metadata
+        run: python3 scripts/j04_d1_dry_run.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Ensure only sanitized public artifacts would be built
+        run: |
+          node scripts/test_public_site_build.mjs
+          test ! -d dist/database
+          test ! -d dist/scripts
+          test ! -d dist/tests
