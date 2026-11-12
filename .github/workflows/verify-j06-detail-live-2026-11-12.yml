@@ -1,0 +1,39 @@
+name: Verify J-06 poet and poem return navigation on live Production
+on:
+  push:
+    branches: [ci/j06-poet-poem-live-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify new navigation helper, catalog and detail pages are live
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://aljamharah.pages.dev';
+          const pages=[
+            ['catalog.html','const detailLink=url=>groupKey?', 'detailLink("poet.html?slug="'],
+            ['poet.html','jamharah-detail-navigation.js','returnNav.add("poem.html?slug="'],
+            ['poem.html','jamharah-detail-navigation.js','const returnPage=returnNav.from(params.get("from"))'],
+            ['assets/jamharah-detail-navigation.js','root.JamharahReturnNav=Object.freeze({from,add})','const GROUPS=new Set(']
+          ];
+          let live=false;
+          for(let attempt=0;attempt<16;attempt++){
+            let hits=0;
+            for(const [path,a,b] of pages){
+              const response=await fetch(base+'/'+path,{headers:{'Cache-Control':'no-cache'},signal:AbortSignal.timeout(12000)});
+              const html=await response.text();
+              if(response.status===200 && html.includes(a) && html.includes(b)) hits++;
+            }
+            live=hits===pages.length;
+            console.log('J06_LIVE_DEPLOYMENT_CHECK',JSON.stringify({attempt:attempt+1,passed: hits,total:pages.length}));
+            if(live)break;
+            await new Promise(r=>setTimeout(r,7000));
+          }
+          const home=await fetch(base+'/',{signal:AbortSignal.timeout(12000)});
+          console.log('J06_LIVE_HOME',home.status);
+          console.log('J06_POET_POEM_NAVIGATION_DEPLOYED',live?'PASS':'NOT_VERIFIED');
+          if(!live||home.status!==200)process.exitCode=1;
+          NODE
