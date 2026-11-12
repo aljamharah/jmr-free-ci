@@ -1,4 +1,4 @@
-name: Verify J-06 library and book reader on live Production
+name: Verify J-06 reader navigation and J-08 mobile controls on live Production
 on:
   push:
     branches: [ci/j06-library-reader-live-2026-11-12]
@@ -17,7 +17,8 @@ jobs:
             ['library.html','const initialLibraryState=','libraryNav.book(book.id,libraryOrigin())'],
             ['book.html','libraryNav.reader(id,"external",libraryOrigin?.href)','libraryOrigin.href+"#booksSection"'],
             ['reader.html','libraryNav.book(id,libraryOrigin?.href)','$("#backToBook").href='],
-            ['assets/jamharah-library-navigation.js','root.JamharahLibraryNav=Object.freeze({create,parse,book,reader})','const SUBS=']
+            ['assets/jamharah-library-navigation.js','root.JamharahLibraryNav=Object.freeze({create,parse,book,reader})','const SUBS='],
+            ['library.html','.page-button{min-width:44px;height:44px;','.subfilters .subfilter{min-height:44px;']
           ];
           let ready=false;
           for(let attempt=0;attempt<16;attempt++){
@@ -36,6 +37,6 @@ jobs:
           const index=await fetch(base+'/content/books/index.json',{signal:AbortSignal.timeout(12000)});
           console.log('J06_HOME',home.status);
           console.log('J06_BOOK_INDEX',index.status);
-          console.log('J06_READER_NAV_DEPLOYED',ready?'PASS':'NOT_VERIFIED');
+          console.log('J06_J08_LIBRARY_LIVE_DEPLOYED',ready?'PASS':'NOT_VERIFIED');
           if(!ready||home.status!==200||index.status!==200)process.exitCode=1;
           NODE
