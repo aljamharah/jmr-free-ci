@@ -1,0 +1,32 @@
+name: Validate bounded lexicon cache without paid services
+on:
+  push:
+    branches:
+      - ci/lexicon-bounded-cache-2026-11-12
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lexicon-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: perf/lexicon-bounded-cache-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache/retry/concurrency unit tests
+        run: node --test tests/lexicon-shard-cache.test.mjs
+      - name: Build sanitized public output
+        run: node scripts/build_public_site.mjs
+      - name: Confirm internal repo directories are absent from public output
+        run: |
+          test ! -d dist/scripts
+          test ! -d dist/database
+          test ! -d dist/workers
+          test ! -d dist/tests
+          test ! -d dist/.github
