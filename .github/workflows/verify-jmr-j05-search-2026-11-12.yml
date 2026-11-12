@@ -25,6 +25,14 @@ jobs:
           node scripts/test_jmr_runtime.mjs
           node scripts/test_jmr_failure_paths.mjs
           node scripts/validate_jmr_quran.mjs
+      - name: Compile actual Cloudflare Pages Functions bundle locally without deploying
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          npm install --no-save --no-audit --no-fund wrangler@4
+          npx wrangler pages functions build functions --outdir /tmp/jmr-pages-bundle --compatibility-date 2026-11-12
+          test -f /tmp/jmr-pages-bundle/index.js
+          grep -q 'published_index_metadata_not_verified_sources' /tmp/jmr-pages-bundle/index.js
       - name: Build verified static public website
         run: |
           node scripts/build_public_site.mjs
