@@ -31,41 +31,62 @@ const paths = [
 const extras = ['7f4e2712','5ea3503d','bcd3c544','56e7e6e5','ca95cc72'];
 const hosts = [...new Set([
   ...pairs.flatMap(([id,alias])=>[id,alias]),
-  ...extras,'aljamharah'
-])].map(x=> x+'.aljamharah.pages.dev');
+  ...extras
+])].map(x=> x+'.aljamharah.pages.dev').concat(['aljamharah.pages.dev']);
 const tasks=hosts.flatMap(host=>paths.map(path=>({host,path})));
 const results=[];
+const PUBLIC_POEM_FIELDS = new Set([
+ 'slug','title','poet_slug','era_id','collection_id','verse_count','poem_subject',
+ 'poem_type','meter','rhyme_letter','source_reference','source_url',
+ 'text_status','rights_status','publication_status','body'
+]);
+function inspectPoemsJson(data) {
+ if (!data || !Array.isArray(data.poems) || Object.keys(data).some(k => k !== 'poems')) return 'EDITORIAL_DATA_EXPOSED';
+ for (const poem of data.poems) {
+   if (!poem || poem.publication_status !== 'published') return 'EDITORIAL_DATA_EXPOSED';
+   if (Object.keys(poem).some(k => !PUBLIC_POEM_FIELDS.has(k))) return 'EDITORIAL_DATA_EXPOSED';
+   if (poem.body && !(poem.text_status==='local_text' && ['public_domain','permission_granted'].includes(poem.rights_status))) return 'EDITORIAL_DATA_EXPOSED';
+ }
+ return 'PUBLISHED_POEMS_ONLY';
+}
 async function inspect({host,path}) {
  const url='https://'+host+path;
  try{
-   const response=await fetch(url,{redirect:'manual',headers:{Accept:'*/*'},signal:AbortSignal.timeout(16000)});
+   const response=await fetch(url,{redirect:'manual',headers:{Accept:'*/*'},signal:AbortSignal.timeout(18000)});
    const type=(response.headers.get('content-type')||'').toLowerCase();
-   let text='';
+   const poemPath=path.startsWith('/content/');
+   let text='',overLimit=false;
    if(response.status===200){
      const reader=response.body?.getReader();
      if(reader){
-       let bytes=0; const chunks=[];
-       while(bytes<65536){
-         const {value,done}=await reader.read(); if(done)break;
+       let bytes=0;const chunks=[],maxBytes=poemPath?8*1024*1024:65536;
+       while(true){
+         const {value,done}=await reader.read();if(done)break;
          if(!value)continue;
-         const take=value.subarray(0,Math.min(value.length,65536-bytes));
-         chunks.push(take);bytes+=take.length;
+         if(bytes+value.length>maxBytes){overLimit=true;break;}
+         chunks.push(Buffer.from(value));bytes+=value.length;
        }
-       await reader.cancel().catch(()=>{});
-       text=new TextDecoder().decode(Buffer.concat(chunks.map(x=>Buffer.from(x))));
+       if(overLimit) await reader.cancel().catch(()=>{});
+       text=new TextDecoder().decode(Buffer.concat(chunks));
      }
    }
-   const html=type.includes('text/html') && /<(!doctype\s+html|html[\s>]|head[\s>]|title[\s>])/i.test(text);
-   const likelyRaw=path.startsWith('/content/') ? response.status===200 && (type.includes('json') || /^\s*[\[{]/.test(text)) :
-      response.status===200 && !html && (
-        /^(import |export |const |function |#|name:|\{|\[)/m.test(text) ||
-        /javascript|json|markdown|text\/plain|yaml|octet-stream/i.test(type));
-   const editorial=path.startsWith('/content/') && /publication_status|rights_basis|editorial_note|text_attribution|draft/i.test(text);
    const status=response.status;
-   const verdict=likelyRaw?(path.startsWith('/content/')?'POTENTIAL_EDITORIAL_EXPOSURE':'INTERNAL_SOURCE_EXPOSED'):
-     html?'HTML_FALLBACK':[403,404,410].includes(status)?'UNAVAILABLE':
-     (status>=300&&status<400)?'REDIRECT_UNVERIFIED':'UNVERIFIED';
-   return {host,path,status,type,verdict,editorialMarker:editorial || undefined};
+   const html=type.includes('text/html') && /<(!doctype\s+html|html[\s>]|head[\s>]|title[\s>])/i.test(text);
+   let verdict;
+   if([403,404,410].includes(status)) verdict='UNAVAILABLE';
+   else if(status>=300 && status<400) verdict='REDIRECT_UNVERIFIED';
+   else if(status!==200) verdict='UNVERIFIED';
+   else if(html) verdict='HTML_FALLBACK';
+   else if(poemPath && overLimit) verdict='JSON_REVIEW_REQUIRED';
+   else if(poemPath) {
+     try { verdict=inspectPoemsJson(JSON.parse(text)); }
+     catch { verdict='JSON_REVIEW_REQUIRED'; }
+   } else {
+     verdict= /^(import |export |const |function |#|name:|\{|\[)/m.test(text) ||
+       /javascript|json|markdown|text\/plain|yaml|octet-stream/i.test(type)
+       ? 'INTERNAL_SOURCE_EXPOSED' : 'UNVERIFIED';
+   }
+   return {host,path,status,type,verdict};
  }catch(e){return {host,path,verdict:'ERROR_UNVERIFIED',error:String(e.message||e).slice(0,150)}}
 }
 const workers=12;let cursor=0;
@@ -73,14 +94,14 @@ await Promise.all(Array.from({length:workers},async()=>{
  while(cursor<tasks.length){const i=cursor++; results[i]=await inspect(tasks[i]);}
 }));
 const counts={};for(const r of results)counts[r.verdict]=(counts[r.verdict]||0)+1;
-const flags=results.filter(r=>['POTENTIAL_EDITORIAL_EXPOSURE','INTERNAL_SOURCE_EXPOSED'].includes(r.verdict));
-const unresolved=results.filter(r=>['UNVERIFIED','REDIRECT_UNVERIFIED','ERROR_UNVERIFIED'].includes(r.verdict));
+const flags=results.filter(r=>['EDITORIAL_DATA_EXPOSED','INTERNAL_SOURCE_EXPOSED'].includes(r.verdict));
+const unresolved=results.filter(r=>['UNVERIFIED','REDIRECT_UNVERIFIED','ERROR_UNVERIFIED','JSON_REVIEW_REQUIRED'].includes(r.verdict));
 console.log('AUDIT_SUMMARY',JSON.stringify({uniqueHosts:hosts.length,probes:tasks.length,counts,flagCount:flags.length,unverifiedCount:unresolved.length}));
 for(const r of flags)console.log('EXPOSURE_FLAG',JSON.stringify(r));
 for(const r of unresolved)console.log('UNVERIFIED_PATH',JSON.stringify(r));
 const byHost=hosts.map(host=>{
  const rs=results.filter(r=>r.host===host);
- return {host,exposed:rs.filter(x=>/EXPOSURE$|SOURCE_EXPOSED$/.test(x.verdict)).length,
+ return {host,exposed:rs.filter(x=>/EDITORIAL_DATA_EXPOSED$|INTERNAL_SOURCE_EXPOSED$/.test(x.verdict)).length,
   unavailable:rs.filter(x=>x.verdict==='UNAVAILABLE').length,
   fallback:rs.filter(x=>x.verdict==='HTML_FALLBACK').length,
   unverified:rs.filter(x=>x.verdict.includes('UNVERIFIED')).length};
