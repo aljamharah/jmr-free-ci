@@ -50,6 +50,10 @@ jobs:
           test ! -d dist/database
           test ! -d dist/scripts
           test ! -d dist/tests
+      - name: Re-run exact private repository foundation gate and preview evaluator dry-run
+        run: |
+          node scripts/check_site_foundation.mjs
+          node scripts/evaluate_jmr_preview.mjs --dry-run --suite generative-smoke
       - name: Install headless Chromium without persistent dependencies
         run: |
           npm install --no-save --no-audit --no-fund playwright
