@@ -1,0 +1,25 @@
+name: Validate read-only Cloudflare Pages security audit
+on:
+  push:
+    branches:
+      - ci/readonly-pages-security-audit-2026-11-12
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact private PR #56 source read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 81d46d294d7052cb40210f1d7651c10af75a10f6
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate safe Cloudflare inventory and exposure checks
+        run: node --test tests/cloudflare-pages-audit.test.mjs
+      - name: Ensure source branch was not modified
+        run: test -z "$(git status --porcelain)"
