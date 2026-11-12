@@ -1,0 +1,21 @@
+name: Verify Cloudflare Pages 25-entry deployment inventory pagination
+on:
+  push:
+    branches: [ci/cloudflare-pagination-fix-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  audit-unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: security/cloudflare-pages-pagination-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test tests/cloudflare-pages-audit.test.mjs
+      - run: node --check scripts/audit_cloudflare_pages.mjs
