@@ -1,0 +1,52 @@
+name: Prove live JMR Worker revision without model inference
+on:
+  push:
+    branches: [ci/jmr-runtime-revision-live-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify JMR deployment revision via non-billable GET and malformed JSON
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://aljamharah.pages.dev';
+          const expected='jmr-retrieval-2026-11-12-dedup-r1';
+          let verified=false;
+          for(let attempt=1;attempt<=18;attempt++){
+            const get=await fetch(base+'/api/jmr',{
+              method:'GET',
+              headers:{'Cache-Control':'no-cache'},
+              signal:AbortSignal.timeout(16000)
+            });
+            const revision=get.headers.get('X-JMR-Revision');
+            const getJson=await get.json().catch(()=>null);
+            const matches=get.status===405 && revision===expected &&
+               getJson?.error==='الطريقة غير مسموحة.';
+            console.log('JMR_REVISION_CHECK',JSON.stringify({
+              attempt,status:get.status,revision:revision||null,verified:matches
+            }));
+            if(matches){
+              const bad=await fetch(base+'/api/jmr',{
+                method:'POST',
+                headers:{'Content-Type':'application/json',Origin:base},
+                body:'{',
+                signal:AbortSignal.timeout(16000)
+              });
+              const malformed=await bad.json().catch(()=>null);
+              verified=bad.status===400 &&
+                bad.headers.get('X-JMR-Revision')===expected &&
+                malformed?.error==='تعذر قراءة بيانات الطلب.';
+              console.log('JMR_REVISION_INVALID_JSON',JSON.stringify({
+                status:bad.status,revision:bad.headers.get('X-JMR-Revision'),verified
+              }));
+              break;
+            }
+            await new Promise(resolve=>setTimeout(resolve,6000));
+          }
+          console.log('JMR_LIVE_WORKER_REVISION',verified?'VERIFIED':'NOT_VERIFIED');
+          console.log('MODEL_INFERENCE_CALLS',0);
+          if(!verified)process.exitCode=1;
+          NODE
