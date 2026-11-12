@@ -55,10 +55,10 @@ async function inspect({host,path}) {
        text=new TextDecoder().decode(Buffer.concat(chunks.map(x=>Buffer.from(x))));
      }
    }
-   const html=type.includes('text/html') && /<(!doctype\\s+html|html[\\s>]|head[\\s>]|title[\\s>])/i.test(text);
-   const likelyRaw=path.startsWith('/content/') ? response.status===200 && (type.includes('json') || /^\\s*[\\[{]/.test(text)) :
+   const html=type.includes('text/html') && /<(!doctype\s+html|html[\s>]|head[\s>]|title[\s>])/i.test(text);
+   const likelyRaw=path.startsWith('/content/') ? response.status===200 && (type.includes('json') || /^\s*[\[{]/.test(text)) :
       response.status===200 && !html && (
-        /^(import |export |const |function |#|name:|\\{|\\[)/m.test(text) ||
+        /^(import |export |const |function |#|name:|\{|\[)/m.test(text) ||
         /javascript|json|markdown|text\/plain|yaml|octet-stream/i.test(type));
    const editorial=path.startsWith('/content/') && /publication_status|rights_basis|editorial_note|text_attribution|draft/i.test(text);
    const status=response.status;
