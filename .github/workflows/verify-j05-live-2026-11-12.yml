@@ -1,0 +1,58 @@
+name: Verify J-05 unified search on live Pages Production
+on:
+  push:
+    branches: [ci/j05-unified-live-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Verify new unified search and public data availability
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://aljamharah.pages.dev';
+          const fetchText=async path=>{
+            const r=await fetch(base+path,{
+              headers:{'Cache-Control':'no-cache'},
+              signal:AbortSignal.timeout(12000)
+            });
+            return {status:r.status,text:await r.text(),type:r.headers.get('content-type')||''};
+          };
+          let deployed=false;
+          for(let attempt=0;attempt<20;attempt++){
+            const [page,home,ui,engine]=await Promise.all([
+              fetchText('/search.html'),fetchText('/'),
+              fetchText('/assets/jamharah-unified-search-ui.mjs'),
+              fetchText('/assets/jamharah-unified-search.mjs')
+            ]);
+            deployed=page.status===200&&
+              page.text.includes('id="unifiedForm"')&&
+              home.text.includes('href="search.html"')&&
+              ui.status===200&&ui.text.includes('publishedSearch(query,index)')&&
+              engine.status===200&&engine.text.includes('function publishedSearch(')&&
+              /javascript|ecmascript/.test(ui.type)&&
+              /javascript|ecmascript/.test(engine.type);
+            console.log('J05_PRODUCTION_DEPLOYMENT',JSON.stringify({
+              attempt:attempt+1,ready:deployed,page:page.status,ui:ui.status,engine:engine.status
+            }));
+            if(deployed)break;
+            await new Promise(r=>setTimeout(r,6000));
+          }
+          const [poets,poems,books,manifest]=await Promise.all([
+            fetchText('/content/poets.json'),fetchText('/content/poems.json'),
+            fetchText('/content/books/index.json'),
+            fetchText('/content/jmr/lexicon/manifest.json')
+          ]);
+          const counts={
+            poets:poets.status===200?JSON.parse(poets.text).poets?.length:null,
+            poems:poems.status===200?JSON.parse(poems.text).poems?.length:null,
+            books:books.status===200?JSON.parse(books.text).books?.length:null,
+            lexicon:manifest.status===200?JSON.parse(manifest.text).entry_count:null
+          };
+          console.log('J05_PUBLIC_COUNTS',JSON.stringify(counts));
+          console.log('J05_UNIFIED_SEARCH_LIVE',deployed?'PASS':'NOT_VERIFIED');
+          if(!deployed||counts.poets!==13||counts.poems!==11||counts.books!==9||
+            counts.lexicon!==20738)process.exitCode=1;
+          NODE
