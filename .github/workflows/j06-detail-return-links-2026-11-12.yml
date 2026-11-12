@@ -1,0 +1,31 @@
+name: J-06 poet/poem return-link regression and safe build
+on:
+  push:
+    branches: [ci/j06-detail-return-links-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  detail-navigation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: fix/j06-poet-poem-return-context-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test safe detail return links and existing navigation
+        run: node --test tests/j06-detail-return-navigation.test.mjs tests/navigation-deferred-sections.test.mjs
+      - name: Build safe static output
+        run: node scripts/build_public_site.mjs
+      - name: Validate published assets and no internal directories
+        run: |
+          test -f dist/assets/jamharah-detail-navigation.js
+          test -f dist/poet.html
+          test -f dist/poem.html
+          test ! -d dist/scripts
+          test ! -d dist/database
+          test ! -d dist/workers
