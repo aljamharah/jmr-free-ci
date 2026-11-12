@@ -1,0 +1,33 @@
+name: J-01 on-demand meanings index safety and regression
+on:
+  push:
+    branches: [ci/j01-meaning-index-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  meaning-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: perf/j01-meaning-on-demand-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Generate sanitized site and on-demand meaning indexes
+        run: node scripts/build_public_site.mjs
+      - name: Test on-demand meaning indexes and old fast-search invariants
+        run: node --test tests/j01-on-demand-meaning-index.test.mjs tests/lexicon-shard-cache.test.mjs
+      - name: Existing fast lexicon and secure output checks
+        run: |
+          node scripts/test_lexicon_fast_search.mjs
+          node scripts/test_public_site_build.mjs
+          test ! -d dist/database
+          test ! -d dist/scripts
+          test ! -d dist/workers
+          test ! -d dist/tests
+      - name: Print public meaning lookup total bytes only
+        run: du -sh dist/content/jmr/lexicon/meaning
