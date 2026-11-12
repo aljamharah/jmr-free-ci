@@ -87,6 +87,26 @@ jobs:
               if not isinstance(project, dict) or project.get("name") != "aljamharah":
                   raise RuntimeError("Project not found; set GitHub repository Actions variable CLOUDFLARE_ACCOUNT_ID.")
 
+              # Only inspect names of expected bindings: never print namespaces, environment values or secrets.
+              configs = project.get("deployment_configs") or {}
+              def binding_status(environment, category, binding):
+                  cfg = configs.get(environment)
+                  if not isinstance(cfg, dict):
+                      return "unknown"
+                  values = cfg.get(category)
+                  if not isinstance(values, dict):
+                      return "missing"
+                  return "present" if binding in values else "missing"
+
+              binding_checks = [
+                  ("Production JMR_RATE_LIMIT_DO", binding_status("production", "durable_object_namespaces", "JMR_RATE_LIMIT_DO")),
+                  ("Preview JMR_RATE_LIMIT_DO", binding_status("preview", "durable_object_namespaces", "JMR_RATE_LIMIT_DO")),
+                  ("Production JMR_RATE_LIMIT_KV", binding_status("production", "kv_namespaces", "JMR_RATE_LIMIT_KV")),
+                  ("Preview JMR_RATE_LIMIT_KV", binding_status("preview", "kv_namespaces", "JMR_RATE_LIMIT_KV")),
+              ]
+              for label, status in binding_checks:
+                  print(label + ": " + status)
+
               latest = get("accounts/" + quote(account, safe="") +
                            "/pages/projects/aljamharah/deployments?per_page=1&page=1").get("result")
               if not isinstance(latest, list):
@@ -97,8 +117,7 @@ jobs:
                   fp.write("## Read-only Cloudflare connectivity\n\n"
                            "- Token: active (never displayed)\n"
                            "- Pages project: aljamharah found\n"
-                           "- Deployment endpoint: accessible\n"
-                           "- No Cloudflare writes, deployments, or deletes performed.\n")
+                           "- Deployment endpoint: accessible\n"\n                           + "".join("- " + label + ": " + status + "\\n" for label, status in binding_checks)\n                           + "- No Cloudflare writes, deployments, or deletes performed.\\n")
           except RuntimeError as exc:
               sys.exit("Connection test failed: " + str(exc))
           PY
