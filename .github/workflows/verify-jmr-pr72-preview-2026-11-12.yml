@@ -21,7 +21,7 @@ jobs:
             const response=await fetch(url,{...opts,signal:AbortSignal.timeout(20000)});
             const body=await response.text();
             let json=null;try{json=JSON.parse(body)}catch{}
-            return {status:response.status,revision:response.headers.get('X-JMR-Revision'),body,json};
+            return {status:response.status,revision:response.headers.get('X-JMR-Revision'),stage:response.headers.get('X-JMR-Rate-Limit-Stage'),body,json};
           };
           for(const deployment of deployments){
             try{
@@ -44,7 +44,7 @@ jobs:
               const ok=Object.values(checks).every(Boolean);
               console.log('JMR_PR72_PREVIEW_NON_INFERENCE',JSON.stringify({
                 name,checks,statuses:[page.status,search.status,method.status,bad.status],
-                revision:method.revision||null,verified:ok,model_requests:0
+                revision:method.revision||null,invalid_error:String(bad.json?.error||'').slice(0,140),invalid_stage:bad.stage||null,verified:ok,model_requests:0
               }));
               if(!ok)failures++;
             }catch(e){
