@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: main
+          ref: test/j08-browser-j01-messaging-2026-11-12
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
       - uses: actions/setup-node@v4
         with:
@@ -23,17 +23,6 @@ jobs:
           npx playwright install chromium
       - name: Build the sanitized public site
         run: node scripts/build_public_site.mjs
-      - name: Diagnose search state if browser smoke encounters a timeout
-        run: |
-          node --input-type=module <<'NODE'
-          import {readFileSync,writeFileSync} from 'node:fs';
-          const path='scripts/test_browser_navigation.mjs';
-          let content=readFileSync(path,'utf8');
-          const old='      await page.waitForFunction(()=>{\\n        const text=document.querySelector("#searchMessage")?.textContent||"";\\n        return text.includes("بحث سريع")||text.includes("تعذر البحث السريع");\\n      },null,{timeout:15000});'.replaceAll('\\n','\n');
-          const next='      await page.waitForFunction(()=>{\\n        const text=document.querySelector("#searchMessage")?.textContent||"";\\n        return text.includes("بحث سريع")||text.includes("تعذر البحث السريع");\\n      },null,{timeout:15000}).catch(async err=>{\\n        console.log("LEXICON_TIMEOUT_DIAGNOSTIC",JSON.stringify({url:page.url(),message:await page.locator("#searchMessage").textContent(),word:await page.locator("#wordSearch").inputValue(),lastRequests:networkRequests.slice(-16)}));\\n        throw err;\\n      });'.replaceAll('\\n','\n');
-          if(!content.includes(old))throw new Error('Expected browser diagnostic anchor changed');
-          writeFileSync(path,content.replace(old,next));
-          NODE
       - name: Real browser test across phone and desktop viewports
         run: node scripts/test_browser_navigation.mjs
       - name: Verify internal links after browser test
