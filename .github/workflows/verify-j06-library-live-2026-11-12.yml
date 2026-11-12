@@ -16,7 +16,7 @@ jobs:
           const requirements=[
             ['library.html','const initialLibraryState=','libraryNav.book(book.id,libraryOrigin())'],
             ['book.html','libraryNav.reader(id,"external",libraryOrigin?.href)','libraryOrigin.href+"#booksSection"'],
-            ['reader.html','libraryNav.book(id,libraryOrigin?.href)','reader.html'],
+            ['reader.html','libraryNav.book(id,libraryOrigin?.href)','$("#backToBook").href='],
             ['assets/jamharah-library-navigation.js','root.JamharahLibraryNav=Object.freeze({create,parse,book,reader})','const SUBS=']
           ];
           let ready=false;
