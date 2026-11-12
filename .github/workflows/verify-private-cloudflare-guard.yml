@@ -1,0 +1,38 @@
+name: Verify private Cloudflare guard offline
+
+on:
+  push:
+    branches:
+      - ci/verify-private-cloudflare-guard-2026-11-12
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.actor == 'aljamharah' && github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout private security branch with read-only token
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: ops/private-cloudflare-maintenance-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify guardrail tests without any Cloudflare credential
+        run: node --test tests/cloudflare-maintenance-guard.test.mjs
+      - name: Confirm maintenance workflow is dispatch-only
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/cloudflare-private-maintenance.yml').read_text()
+          assert 'workflow_dispatch:' in workflow, 'Expected manually triggered workflow'
+          assert 'github.ref == ' in workflow, 'Expected main-branch restriction'
+          assert 'node --test tests/cloudflare-maintenance-guard.test.mjs' in workflow
+          assert 'node scripts/cloudflare_maintenance_guard.mjs' in workflow
+          print('Manual-only security workflow structure: PASS')
+          PY
