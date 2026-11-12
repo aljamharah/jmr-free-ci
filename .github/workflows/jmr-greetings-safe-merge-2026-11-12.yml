@@ -21,7 +21,7 @@ jobs:
           git -c user.name=ci -c user.email=ci@example.org merge --no-commit --no-ff FETCH_HEAD
           git status --short
           grep -q 'jmr-retrieval-2026-11-12-dedup-r1' functions/api/jmr.js
-          grep -q 'temperature: isBriefTurn(message) ? 0.55 : 0.2' functions/api/jmr.js
+          grep -q 'temperature: isBriefTurn(message) && !quranSensitive ? 0.55 : 0.2' functions/api/jmr.js
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
