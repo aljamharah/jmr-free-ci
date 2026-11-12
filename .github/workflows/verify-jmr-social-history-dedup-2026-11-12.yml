@@ -1,0 +1,46 @@
+name: JMR conversation-wide social repeat protection
+on:
+  push:
+    branches: [ci/jmr-social-history-dedup-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: fix/jmr-social-history-dedup-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate 11 social follow-ups, similarity guard, scientific and Quran regressions
+        run: |
+          node --test tests/jmr.test.js tests/jmr-poetry.test.js
+          node scripts/test_jmr_public_search.mjs
+          node scripts/test_jmr_retrieval_benchmark.mjs
+          node scripts/test_jmr_api.mjs
+          node scripts/validate_jmr_quran.mjs
+      - name: Check full published-site foundation and safe build
+        run: |
+          node scripts/check_site_foundation.mjs
+          node scripts/audit_site_links.mjs
+          test ! -d dist/database
+          test ! -d dist/scripts
+          test ! -d dist/tests
+      - name: Verify real Cloudflare Pages Functions compilation without deployment
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          npm install --no-save --no-audit --no-fund wrangler@4
+          npx wrangler pages functions build functions --outdir /tmp/jmr-long-social-guard --compatibility-date 2026-11-12
+          grep -q 'natural-replies-r3' /tmp/jmr-long-social-guard/index.js
+      - name: Temporary free Chromium
+        run: |
+          npm install --no-save --no-audit --no-fund playwright
+          npx playwright install chromium
+      - name: Verify JMR social keys and new-chat reset on phone and desktop
+        run: node scripts/test_browser_navigation.mjs
