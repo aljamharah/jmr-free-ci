@@ -1,0 +1,33 @@
+name: Validate J-06 library-book-reader navigation
+on:
+  push:
+    branches: [ci/j06-library-book-reader-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  library-navigation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: fix/j06-library-book-reader-context-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Library reader round trips and existing J-06 route regression
+        run: node --test tests/j06-library-book-reader-navigation.test.mjs tests/j06-detail-return-navigation.test.mjs tests/navigation-deferred-sections.test.mjs
+      - name: Build sanitized static Pages output
+        run: node scripts/build_public_site.mjs
+      - name: Verify required public files and no internal sources
+        run: |
+          test -f dist/assets/jamharah-library-navigation.js
+          test -f dist/library.html
+          test -f dist/book.html
+          test -f dist/reader.html
+          test ! -d dist/scripts
+          test ! -d dist/workers
+          test ! -d dist/database
+          test ! -d dist/tests
