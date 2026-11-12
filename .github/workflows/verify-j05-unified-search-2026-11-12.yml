@@ -1,0 +1,37 @@
+name: J-05 unified public search safety and live-browser regression
+on:
+  push:
+    branches: [ci/j05-unified-search-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: feature/j05-unified-search-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Unit safety and search checks
+        run: node --test tests/j05-unified-search.test.mjs
+      - name: Build sanitized public Pages site
+        run: node scripts/build_public_site.mjs
+      - name: Validate site data privacy and internal links
+        run: |
+          node scripts/test_public_site_build.mjs
+          node scripts/audit_site_links.mjs
+          test -f dist/search.html
+          test -f dist/assets/jamharah-unified-search.mjs
+          test ! -d dist/database
+          test ! -d dist/scripts
+      - name: Install free ephemeral Playwright browser
+        run: |
+          npm install --no-save --no-audit --no-fund playwright
+          npx playwright install chromium
+      - name: Test all pages on phone and desktop browser
+        run: node scripts/test_browser_navigation.mjs
