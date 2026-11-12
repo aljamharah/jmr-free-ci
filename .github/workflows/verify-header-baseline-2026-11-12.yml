@@ -1,0 +1,21 @@
+name: Verify J-05 header baseline on main fix PR76
+on:
+  push:
+    branches: [ci/header-baseline-mainfix-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: test/j05-unified-header-baseline-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify all ten existing foundation checks, no paid inference
+        run: node scripts/check_site_foundation.mjs
