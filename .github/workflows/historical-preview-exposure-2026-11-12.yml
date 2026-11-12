@@ -1,0 +1,27 @@
+name: Read-only historical Cloudflare Preview exposure scan
+on:
+  push:
+    branches:
+      - ci/historical-preview-exposure-2026-11-12
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  historical-urls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read-only probes of known historical immutable URLs and aliases
+        run: node scripts/scan-preview-exposure-2026-11-12.mjs
+      - name: Save full structured results for manual classification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-cloudflare-exposure-audit
+          path: historical-exposure-audit.json
+          if-no-files-found: ignore
+          retention-days: 7
