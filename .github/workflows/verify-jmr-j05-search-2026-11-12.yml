@@ -1,0 +1,41 @@
+name: JMR J-05 published metadata discovery and Quran safety
+on:
+  push:
+    branches: [ci/jmr-j05-public-search-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  jmr-public-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: jmr/j05-public-search-metadata-2026-11-12
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: JMR public index discovery, rights and Quran isolation
+        run: node scripts/test_jmr_public_search.mjs
+      - name: Existing JMR API, runtime, error and Quran tests
+        run: |
+          node scripts/test_jmr_api.mjs
+          node scripts/test_jmr_runtime.mjs
+          node scripts/test_jmr_failure_paths.mjs
+          node scripts/validate_jmr_quran.mjs
+      - name: Build verified static public website
+        run: |
+          node scripts/build_public_site.mjs
+          node scripts/test_public_site_build.mjs
+          node scripts/audit_site_links.mjs
+          test ! -d dist/database
+          test ! -d dist/scripts
+          test ! -d dist/tests
+      - name: Install free ephemeral browser for JMR real UI mock
+        run: |
+          npm install --no-save --no-audit --no-fund playwright
+          npx playwright install chromium
+      - name: Check JMR local links and 11-page phone/desktop navigation
+        run: node scripts/test_browser_navigation.mjs
