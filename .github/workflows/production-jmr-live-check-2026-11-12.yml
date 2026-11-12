@@ -1,0 +1,61 @@
+name: Verify live production JMR rate-limit POST and exposure paths
+on:
+  push:
+    branches: [ci/production-jmr-live-post-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  safe-live-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Bounded production POST and historical exposure checks (no secrets, no inference)
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const base = 'https://aljamharah.pages.dev';
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+          const sec = new Date().getUTCSeconds();
+          if (sec > 30) await sleep((61 - sec) * 1000);
+          const send = async () => {
+            const response = await fetch(base + '/api/jmr', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+              body: JSON.stringify({message:''}),
+              redirect: 'manual',
+              signal: AbortSignal.timeout(20000),
+            });
+            let body = {};
+            try { body = await response.json(); } catch {}
+            return {status: response.status, stage: body.stage ?? null};
+          };
+          // Empty messages are rejected before inference: no AI credits consumed.
+          const results = await Promise.all(Array.from({length:15}, () => send()));
+          const counts = {};
+          for (const r of results) counts[r.status] = (counts[r.status] ?? 0) + 1;
+          console.log('PRODUCTION_POST_15_CONCURRENT_COUNTS:', JSON.stringify(counts));
+          console.log('PRODUCTION_POST_429_STAGES:', JSON.stringify(results.filter(r=>r.status===429).map(r=>r.stage)));
+          const limitPassed = counts[400] === 12 && counts[429] === 3;
+          console.log('PRODUCTION_POST_CONCURRENT_LIMIT:', limitPassed ? 'PASS' : 'NOT_VERIFIED');
+          const checks = [
+            ['old-production-github-workflow', 'https://7f4e2712.aljamharah.pages.dev/.github/workflows/validate-library.yml'],
+            ['old-production-encoded-poems-json', 'https://7f4e2712.aljamharah.pages.dev/content/poems%2Ejson'],
+            ['old-library-preview-poems-json', 'https://9b603e29.aljamharah.pages.dev/content/poems.json'],
+          ];
+          let exposed = 0;
+          for (const [label, url] of checks) {
+            try {
+              const response = await fetch(url, {redirect:'manual', signal:AbortSignal.timeout(20000)});
+              const type = response.headers.get('content-type') ?? '';
+              const body = (await response.text()).slice(0,32768);
+              const looksLikeHtml = type.includes('text/html') && (/<html[\\s>]/i.test(body) || /<title/i.test(body));
+              const potentiallyExposed = response.ok && !looksLikeHtml && (type.includes('json') || type.includes('yaml') || type.includes('text/plain') || type.includes('application/octet-stream'));
+              if (potentiallyExposed) exposed++;
+              console.log('HISTORICAL_EXPOSURE_CHECK:', JSON.stringify({label,status:response.status,contentType:type,htmlFallback:looksLikeHtml,potentiallyExposed}));
+            } catch (err) {
+              console.log('HISTORICAL_EXPOSURE_CHECK:', JSON.stringify({label,error:String(err?.message||err)}));
+            }
+          }
+          if (exposed) { console.error('Potential raw-file exposure detected; investigate before cleanup.'); process.exitCode=1; }
+          if (!limitPassed) { console.error('Production rate-limit 15-concurrent check not verified.'); process.exitCode=1; }
+          NODE
