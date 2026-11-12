@@ -3,7 +3,7 @@ name: Cloudflare connection audit (read only)
 # Initial test uses HTTP GET only; never deploys, edits, or deletes Cloudflare resources.
 on:
   push:
-    branches: [ops/cloudflare-connection-2026-11-12]
+    branches: [ops/cloudflare-release-readonly-2026-11-12]
     paths: [.github/workflows/cloudflare-connect-readonly.yml]
   workflow_dispatch:
 
@@ -107,6 +107,34 @@ jobs:
               for label, status in binding_checks:
                   print(label + ": " + status)
 
+              # Observe the live Git integration without displaying any configuration secrets.
+              source = project.get("source") or {}
+              source_config = source.get("config") or {}
+              provider = source.get("type")
+              repo_owner = source_config.get("owner")
+              repo_name = source_config.get("repo_name")
+              production_branch = project.get("production_branch")
+              matches_source = (provider == "github" and repo_owner == "aljamharah"
+                                and repo_name in ("aljamharah", "aljamharah/aljamharah"))
+              print("Pages GitHub source: " + ("MATCH" if matches_source else "UNCONFIRMED"))
+              print("Production branch main: " + ("MATCH" if production_branch == "main" else "NOT_MATCHED"))
+              auto_deploy = source_config.get("production_deployments_enabled")
+              print("Automatic production deployments: " +
+                    ("enabled" if auto_deploy is True else "disabled" if auto_deploy is False else "not_reported"))
+
+              production_deployments = get(
+                  "accounts/" + quote(account, safe="") +
+                  "/pages/projects/aljamharah/deployments?env=production&per_page=1&page=1"
+              ).get("result")
+              if not isinstance(production_deployments, list):
+                  raise RuntimeError("Invalid production deployment response")
+              production_stage = "not_reported"
+              if production_deployments:
+                  status = (production_deployments[0].get("latest_stage") or {}).get("status")
+                  if status in ("success", "failure", "active", "queued", "canceled", "skipped", "idle"):
+                      production_stage = status
+              print("Latest production deployment stage: " + production_stage)
+
               latest = get("accounts/" + quote(account, safe="") +
                            "/pages/projects/aljamharah/deployments?per_page=1&page=1").get("result")
               if not isinstance(latest, list):
@@ -119,6 +147,9 @@ jobs:
                            "- Pages project: aljamharah found\n"
                            "- Deployment endpoint: accessible\n"
                            + "".join("- " + label + ": " + status + "\n" for label, status in binding_checks)
+                           + "- GitHub source matches expected repository: " + str(matches_source) + "\n"
+                           + "- Production branch main: " + str(production_branch == "main") + "\n"
+                           + "- Latest production deployment stage: " + production_stage + "\n"
                            + "- No Cloudflare writes, deployments, or deletes performed.\n")
           except RuntimeError as exc:
               sys.exit("Connection test failed: " + str(exc))
