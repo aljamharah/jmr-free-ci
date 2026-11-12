@@ -5,6 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      preview_url:
+        description: "Full verified HTTPS Preview origin only; leave empty for offline-only tests"
+        required: false
+        type: string
+        default: ""
       run_semantic_live_checks:
         description: "Send two real model questions to verify poet retrieval and Quran isolation; requires available Workers AI quota."
         required: false
@@ -109,9 +114,28 @@ jobs:
         working-directory: private-source/workers/jmr-ratelimit-do
         run: npm test
 
-      - name: Check deployed JMR Preview page and API guard
+      - name: Verify manual Preview URL is a trusted aljamharah.pages.dev preview origin
+        if: github.event_name == 'workflow_dispatch' && inputs.preview_url != ''
         env:
-          PREVIEW_URL: https://jmr-preview-rate-limit-2026.aljamharah.pages.dev
+          PREVIEW_URL: ${{ inputs.preview_url }}
+        run: |
+          node --input-type=module <<'NODE'
+          const input = process.env.PREVIEW_URL || '';
+          if (!/^https:\/\/[a-z0-9-]+\.aljamharah\.pages\.dev$/.test(input)) {
+            throw new Error('Only a verified aljamharah.pages.dev Preview origin is accepted; no paths, ports or query strings.');
+          }
+          console.log('Preview URL format validated (availability must be checked by following tests).');
+          NODE
+
+      - name: Explain why live Preview checks are manual
+        if: github.event_name == 'push'
+        run: |
+          echo "The retired jmr-preview-rate-limit-2026 alias returns 404. Offline validation still runs on every push; live Preview checks require a fresh verified Preview URL in workflow_dispatch." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check deployed JMR Preview page and API guard
+        if: github.event_name == 'workflow_dispatch' && inputs.preview_url != ''
+        env:
+          PREVIEW_URL: ${{ inputs.preview_url }}
         run: |
           set -euo pipefail
           page_status="$(curl --silent --show-error --location --max-time 25 \
@@ -175,9 +199,10 @@ jobs:
           echo "Preview page, poet index, reviewed Quran path and API method guard verified."
 
       - name: Send one real language question to JMR Preview
+        if: github.event_name == 'workflow_dispatch' && inputs.run_semantic_live_checks && inputs.preview_url != ''
         working-directory: private-source
         env:
-          JMR_PREVIEW_URL: https://jmr-preview-rate-limit-2026.aljamharah.pages.dev
+          JMR_PREVIEW_URL: ${{ inputs.preview_url }}
         run: |
           node scripts/evaluate_jmr_preview.mjs --limit 1 --out /tmp/jmr-live-smoke-report.json
           node --input-type=module <<'NODE'
@@ -203,9 +228,9 @@ jobs:
           NODE
 
       - name: Verify live poet retrieval and Quran isolation
-        if: github.event_name == 'workflow_dispatch' && inputs.run_semantic_live_checks
+        if: github.event_name == 'workflow_dispatch' && inputs.run_semantic_live_checks && inputs.preview_url != ''
         env:
-          JMR_PREVIEW_URL: https://jmr-preview-rate-limit-2026.aljamharah.pages.dev
+          JMR_PREVIEW_URL: ${{ inputs.preview_url }}
         run: |
           node --input-type=module <<'NODE'
           const endpoint = new URL("/api/jmr", process.env.JMR_PREVIEW_URL).href;
