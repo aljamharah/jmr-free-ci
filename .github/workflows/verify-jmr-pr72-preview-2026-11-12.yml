@@ -1,0 +1,59 @@
+name: PR72 Cloudflare previews non-inference safety smoke
+on:
+  push:
+    branches: [ci/jmr-pr72-no-inference-preview-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  previews:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify deployed PR72 preview URLs with NO valid model requests
+        run: |
+          node --input-type=module <<'NODE'
+          const deployments=[
+            {name:'preview',base:'https://521330a2.aljamharah.pages.dev'},
+            {name:'staging',base:'https://c31adae7.aljamharah-staging.pages.dev'}
+          ];
+          let failures=0;
+          const get=async(url,opts={})=>{
+            const response=await fetch(url,{...opts,signal:AbortSignal.timeout(20000)});
+            const body=await response.text();
+            let json=null;try{json=JSON.parse(body)}catch{}
+            return {status:response.status,revision:response.headers.get('X-JMR-Revision'),body,json};
+          };
+          for(const deployment of deployments){
+            try{
+              const {base,name}=deployment;
+              const [page,search,method]=await Promise.all([
+                get(base+'/jmr.html'),get(base+'/search.html'),
+                get(base+'/api/jmr',{method:'GET'})
+              ]);
+              const bad=await get(base+'/api/jmr',{
+                method:'POST',headers:{Origin:base,'Content-Type':'application/json'},
+                body:'{'
+              });
+              const checks={
+                jmr_page:page.status===200&&page.body.includes('id="sendButton"'),
+                search_page:search.status===200&&search.body.includes('id="unifiedForm"'),
+                get_method_guard:method.status===405,
+                invalid_json_guard:bad.status===400,
+                no_server_errors:[page,search,method,bad].every(r=>r.status<500)
+              };
+              const ok=Object.values(checks).every(Boolean);
+              console.log('JMR_PR72_PREVIEW_NON_INFERENCE',JSON.stringify({
+                name,checks,statuses:[page.status,search.status,method.status,bad.status],
+                revision:method.revision||null,verified:ok,model_requests:0
+              }));
+              if(!ok)failures++;
+            }catch(e){
+              console.error('JMR_PR72_PREVIEW_UNAVAILABLE',JSON.stringify({
+                name:deployment.name,error:String(e).slice(0,350),model_requests:0
+              }));
+              failures++;
+            }
+          }
+          console.log('JMR_PR72_SAFE_PREVIEW_OUTCOME',failures?'NOT_VERIFIED':'PASS');
+          if(failures)process.exitCode=1;
+          NODE
