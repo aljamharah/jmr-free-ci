@@ -117,7 +117,9 @@ jobs:
                   fp.write("## Read-only Cloudflare connectivity\n\n"
                            "- Token: active (never displayed)\n"
                            "- Pages project: aljamharah found\n"
-                           "- Deployment endpoint: accessible\n"\n                           + "".join("- " + label + ": " + status + "\\n" for label, status in binding_checks)\n                           + "- No Cloudflare writes, deployments, or deletes performed.\\n")
+                           "- Deployment endpoint: accessible\n"
+                           + "".join("- " + label + ": " + status + "\n" for label, status in binding_checks)
+                           + "- No Cloudflare writes, deployments, or deletes performed.\n")
           except RuntimeError as exc:
               sys.exit("Connection test failed: " + str(exc))
           PY
