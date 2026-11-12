@@ -10,6 +10,7 @@ import { appendFileSync } from 'node:fs';
 const CF_ROOT = 'https://api.cloudflare.com/client/v4/';
 const GH_MAIN = 'https://api.github.com/repos/aljamharah/aljamharah/commits/main';
 const shaPattern = /^[0-9a-f]{40}$/i;
+const accountPattern = /^[0-9a-f]{32}$/i;
 
 function checkInput(value, label) {
   if (typeof value !== 'string' || value.length < 10) throw new Error(label + ' missing');
@@ -22,7 +23,7 @@ export function computeSync({ deployedSha, mainSha, latestStage }) {
 }
 
 export async function inspectProductionSync({ accountId, cloudflareToken, githubReadToken, fetchImpl = fetch }) {
-  if (typeof accountId !== 'string' || !shaPattern.test(accountId)) throw new Error('Invalid account ID');
+  if (typeof accountId !== 'string' || !accountPattern.test(accountId)) throw new Error('Invalid account ID');
   checkInput(cloudflareToken, 'Cloudflare read-only token');
   checkInput(githubReadToken, 'Private GitHub read-only token');
 
