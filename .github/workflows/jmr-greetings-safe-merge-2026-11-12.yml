@@ -1,0 +1,52 @@
+name: Validate natural JMR greetings against current main with safe virtual merge
+on:
+  push:
+    branches: [ci/jmr-natural-greetings-merged-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  merged-greetings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - name: Simulate PR-72 merge onto latest production source without pushing
+        run: |
+          git fetch origin refs/heads/quality/jmr-natural-answers-no-forced-poetry-2026-11-12
+          git -c user.name=ci -c user.email=ci@example.org merge --no-commit --no-ff FETCH_HEAD
+          git status --short
+          grep -q 'jmr-retrieval-2026-11-12-dedup-r1' functions/api/jmr.js
+          grep -q 'temperature: isBriefTurn(message) ? 0.55 : 0.2' functions/api/jmr.js
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Natural greetings, no forced poetry, current JMR and Quran regressions
+        run: |
+          node --test tests/jmr.test.js
+          node scripts/test_jmr_api.mjs
+          node scripts/test_jmr_attribution_revision.mjs
+          node scripts/test_jmr_public_search.mjs
+          node scripts/test_jmr_retrieval_benchmark.mjs
+          node scripts/test_jmr_runtime.mjs
+          node scripts/test_jmr_failure_paths.mjs
+          node scripts/validate_jmr_quran.mjs
+      - name: Compile actual Cloudflare Functions without deploying or calling AI
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          npm install --no-save --no-audit --no-fund wrangler@4
+          npx wrangler pages functions build functions --outdir /tmp/jmr-greeting-merged --compatibility-date 2026-11-12
+          test -f /tmp/jmr-greeting-merged/index.js
+      - name: Verify sanitization, all public assets and internal links
+        run: |
+          node scripts/build_public_site.mjs
+          node scripts/test_public_site_build.mjs
+          node scripts/audit_site_links.mjs
+          test ! -d dist/database
+          test ! -d dist/scripts
+          test ! -d dist/tests
