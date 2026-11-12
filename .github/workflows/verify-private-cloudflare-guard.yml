@@ -24,7 +24,9 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
       - name: Verify guardrail tests without any Cloudflare credential
-        run: node --test tests/cloudflare-maintenance-guard.test.mjs
+        run: |
+          node --check scripts/cloudflare_maintenance_guard.mjs
+          node --test tests/cloudflare-maintenance-guard.test.mjs
       - name: Confirm maintenance workflow is dispatch-only
         run: |
           python3 - <<'PY'
