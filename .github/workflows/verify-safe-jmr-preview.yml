@@ -1,0 +1,19 @@
+name: Verify sanitized JMR replacement Preview
+on:
+  push:
+    branches:
+      - ci/secure-preview-successor-2026-11-12
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  live-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check sanitized public Preview and Durable Object behavior
+        run: node scripts/verify-safe-jmr-preview.mjs
