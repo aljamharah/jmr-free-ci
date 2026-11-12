@@ -50,3 +50,9 @@ jobs:
           test ! -d dist/database
           test ! -d dist/scripts
           test ! -d dist/tests
+      - name: Install headless Chromium without persistent dependencies
+        run: |
+          npm install --no-save --no-audit --no-fund playwright
+          npx playwright install chromium
+      - name: Validate unchanged JMR controls and section navigation on phone and desktop
+        run: node scripts/test_browser_navigation.mjs
