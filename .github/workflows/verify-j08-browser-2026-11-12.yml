@@ -30,7 +30,7 @@ jobs:
           const path='scripts/test_browser_navigation.mjs';
           let content=readFileSync(path,'utf8');
           const old='      await page.waitForFunction(()=>{\\n        const text=document.querySelector("#searchMessage")?.textContent||"";\\n        return text.includes("بحث سريع")||text.includes("تعذر البحث السريع");\\n      },null,{timeout:15000});'.replaceAll('\\n','\n');
-          const next='      await page.waitForFunction(()=>{\\n        const text=document.querySelector("#searchMessage")?.textContent||"";\\n        return text.includes("بحث سريع")||text.includes("تعذر البحث السريع");\\n      },null,{timeout:15000}).catch(async err=>{\\n        console.log("LEXICON_TIMEOUT_DIAGNOSTIC",JSON.stringify({url:page.url(),message:await page.locator("#searchMessage").textContent(),word:await page.locator("#wordSearch").inputValue(),lastRequests:networkRequests.slice(-16),errors:current.errors}));\\n        throw err;\\n      });'.replaceAll('\\n','\n');
+          const next='      await page.waitForFunction(()=>{\\n        const text=document.querySelector("#searchMessage")?.textContent||"";\\n        return text.includes("بحث سريع")||text.includes("تعذر البحث السريع");\\n      },null,{timeout:15000}).catch(async err=>{\\n        console.log("LEXICON_TIMEOUT_DIAGNOSTIC",JSON.stringify({url:page.url(),message:await page.locator("#searchMessage").textContent(),word:await page.locator("#wordSearch").inputValue(),lastRequests:networkRequests.slice(-16)}));\\n        throw err;\\n      });'.replaceAll('\\n','\n');
           if(!content.includes(old))throw new Error('Expected browser diagnostic anchor changed');
           writeFileSync(path,content.replace(old,next));
           NODE
