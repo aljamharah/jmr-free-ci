@@ -1,0 +1,50 @@
+name: Verify J-01 meaning index on live Production
+on:
+  push:
+    branches: [ci/j01-live-meaning-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  live-meaning:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify lightweight meaning search and old source-search consent on live site
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://aljamharah.pages.dev';
+          const get=async path=>{
+            const r=await fetch(base+path,{headers:{'Cache-Control':'no-cache'},signal:AbortSignal.timeout(15000)});
+            const body=await r.text();
+            return {status:r.status,text:body};
+          };
+          let pass=false;
+          for(let attempt=0;attempt<18;attempt++){
+            const html=await get('/lexicon.html');
+            const manifest=await get('/content/jmr/lexicon/meaning/manifest.json');
+            let info=null, shard=null;
+            if(manifest.status===200){try{info=JSON.parse(manifest.text)}catch{}}
+            if(info?.prefixes?.length){
+              const prefix=info.prefixes.includes('0634_0639')?'0634_0639':info.prefixes[0];
+              const response=await get('/content/jmr/lexicon/meaning/meaning_'+prefix+'.json');
+              if(response.status===200){try{shard=JSON.parse(response.text)}catch{}}
+            }
+            const pageReady=html.status===200 && html.text.includes('searchCompactMeanings(query)') &&
+              html.text.includes('id="sourceLexiconSearch"') && html.text.includes('submitLexiconSearch("meaning")');
+            const indexReady=info?.version===1 && info?.entry_count===20738 &&
+              info?.source_text_pages_included===false && info?.prefixes?.length>=500 &&
+              shard?.version===1 && shard?.kind==='meaning' &&
+              Object.keys(shard?.terms||{}).length>0;
+            pass=Boolean(pageReady&&indexReady);
+            console.log('J01_LIGHT_MEANING_LIVE',JSON.stringify({attempt:attempt+1,pageReady,indexReady,shardPrefix:shard?.prefix,indexFiles:info?.prefixes?.length}));
+            if(pass)break;
+            await new Promise(r=>setTimeout(r,6000));
+          }
+          const home=await get('/');
+          const fast=await get('/content/jmr/lexicon/manifest.json');
+          const fastCount=fast.status===200?JSON.parse(fast.text).entry_count:null;
+          console.log('J01_HOME',home.status);
+          console.log('J01_FAST_MANIFEST_ENTRIES',fastCount);
+          console.log('J01_ON_DEMAND_INDEX_DEPLOYED',pass?'PASS':'NOT_VERIFIED');
+          if(!pass||home.status!==200||fastCount!==20738)process.exitCode=1;
+          NODE
