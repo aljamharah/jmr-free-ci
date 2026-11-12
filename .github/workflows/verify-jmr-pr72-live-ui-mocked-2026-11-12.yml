@@ -1,0 +1,107 @@
+name: Test live Cloudflare Preview JMR chat UI without model calls
+on:
+  push:
+    branches: [ci/jmr-pr72-live-ui-mocked-2026-11-12]
+permissions:
+  contents: read
+jobs:
+  preview-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install temporary free Chromium test runtime
+        run: |
+          npm install --no-save --no-audit --no-fund playwright
+          npx playwright install chromium
+      - name: Test actual Preview pages with API intercepted (zero AI inference)
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { chromium } from 'playwright';
+          const browser=await chromium.launch({headless:true});
+          const sites=[
+            {name:'primary',url:'https://quality-jmr-natural-answers.aljamharah.pages.dev/jmr.html'},
+            {name:'staging',url:'https://quality-jmr-natural-answers.aljamharah-staging.pages.dev/jmr.html'}
+          ];
+          let successes=0,failed=0;
+          try {
+            for(const site of sites){
+              for(const width of [390,1280]){
+                const context=await browser.newContext({viewport:{width,height:860}});
+                const page=await context.newPage();
+                const jsErrors=[],captured=[];
+                page.on('pageerror',e=>jsErrors.push(String(e).slice(0,150)));
+                const questions=['كيف حالك','شلونك','كيفك','كيف حالك'];
+                const replies=[
+                  'أنا بخير، ويسعدني حديثنا اليوم.',
+                  'الحمد لله، أهلاً بعودتك، ما الجديد عندك؟',
+                  'بخير وبصحة، وأنا حاضر لسؤالك.',
+                  'أهلاً من جديد، نبدأ محادثة أخرى.'
+                ];
+                await page.route('**/api/jmr',async route=>{
+                  const payload=JSON.parse(route.request().postData()||'{}');
+                  captured.push(payload);
+                  const i=captured.length-1;
+                  await route.fulfill({
+                    status:200,contentType:'application/json; charset=utf-8',
+                    body:JSON.stringify({
+                      answer:replies[i],
+                      sources:i===0?[{
+                        id:'poetry-al-sanani-state',
+                        title:'شاهد شعري محرر',
+                        source_type:'curated_reference',
+                        url:'https://example.org/verified-quote'
+                      }]:[]
+                    })
+                  });
+                });
+                try{
+                  const response=await page.goto(site.url,{waitUntil:'domcontentloaded',timeout:25000});
+                  assert.equal(response?.status(),200,site.name+' page must be accessible');
+                  for(let i=0;i<3;i++){
+                    await page.locator('#question').fill(questions[i]);
+                    await page.locator('#sendButton').click();
+                    await page.locator('.message.assistant').nth(i).waitFor({timeout:12000});
+                    const content=await page.locator('.message.assistant').nth(i).innerText();
+                    assert.ok(content.includes(replies[i]),site.name+' answer '+i+' not displayed');
+                  }
+                  assert.equal(captured.length,3);
+                  assert.deepEqual(captured.map(x=>x.message),questions.slice(0,3));
+                  assert.deepEqual(captured[0].conversation,[]);
+                  assert.deepEqual(captured[0].used_poetry_ids,[]);
+                  assert.deepEqual(captured[1].conversation.slice(0,2),[
+                    {role:'user',content:questions[0]},
+                    {role:'assistant',content:replies[0]}
+                  ]);
+                  assert.deepEqual(captured[1].used_poetry_ids,['poetry-al-sanani-state']);
+                  assert.deepEqual(captured[2].used_poetry_ids,['poetry-al-sanani-state']);
+                  await page.locator('#newChat').click();
+                  await page.locator('#question').fill(questions[3]);
+                  await page.locator('#sendButton').click();
+                  await page.locator('.message.assistant').first().waitFor({timeout:12000});
+                  assert.equal(captured.length,4);
+                  assert.deepEqual(captured[3].conversation,[]);
+                  assert.deepEqual(captured[3].used_poetry_ids,[]);
+                  assert.equal(jsErrors.length,0,jsErrors.join(' / '));
+                  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+2),true);
+                  successes++;
+                  console.log('JMR_PR72_LIVE_PREVIEW_UI_MOCK_PASS',JSON.stringify({
+                    site:site.name,viewport:width,mockedTurns:captured.length,
+                    realAIRequests:0,historyCorrect:true,quoteReuseGuardTransport:true,resetCorrect:true
+                  }));
+                }catch(e){
+                  failed++;
+                  console.error('JMR_PR72_LIVE_PREVIEW_UI_MOCK_FAIL',JSON.stringify({
+                    site:site.name,viewport:width,
+                    error:String(e).slice(0,600),captured:captured.length,pageErrors:jsErrors
+                  }));
+                }finally{await context.close()}
+              }
+            }
+          }finally{await browser.close()}
+          console.log('JMR_PR72_LIVE_UI_SUMMARY',JSON.stringify({successes,failed,realModelCalls:0}));
+          if(failed)process.exitCode=1;
+          NODE
