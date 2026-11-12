@@ -22,12 +22,13 @@ jobs:
           git status --short
           grep -q 'jmr-retrieval-2026-11-12-dedup-r1' functions/api/jmr.js
           grep -q 'temperature: isBriefTurn(message) && !quranSensitive ? 0.55 : 0.2' functions/api/jmr.js
+          grep -q 'X-JMR-Social-Release' functions/api/jmr.js
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Natural greetings, no forced poetry, current JMR and Quran regressions
         run: |
-          node --test tests/jmr.test.js
+          node --test tests/jmr.test.js tests/jmr-poetry.test.js
           node scripts/test_jmr_api.mjs
           node scripts/test_jmr_attribution_revision.mjs
           node scripts/test_jmr_public_search.mjs
