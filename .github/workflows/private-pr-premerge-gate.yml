@@ -1,0 +1,171 @@
+name: Private PR SHA-locked premerge gate (read-only)
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/private-pr-premerge-gate.yml"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Private PR number"
+        required: true
+        type: string
+      expected_head_sha:
+        description: "Exact 40-character PR head SHA"
+        required: true
+        type: string
+      require_dist_parity:
+        description: "Enforce byte-identical public dist vs current main"
+        type: boolean
+        required: true
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: jmr-private-pr-premerge
+  cancel-in-progress: false
+jobs:
+  gate:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PRIVATE_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '107' }}
+      EXPECTED_HEAD_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_head_sha || '987cab06a0ab6d43a31f553f46f08210f346a09f' }}
+      STRICT_DIST_PARITY: ${{ github.event_name != 'workflow_dispatch' || inputs.require_dist_parity == true }}
+    steps:
+      - name: Identify same-repo open PR, exact HEAD, and current main SHA
+        id: pin
+        env:
+          PRIVATE_REPO_READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {appendFileSync} from 'node:fs';
+          const pr=process.env.PRIVATE_PR_NUMBER;
+          const expected=(process.env.EXPECTED_HEAD_SHA||'').toLowerCase();
+          if(!/^[1-9][0-9]{0,5}$/.test(pr||'')||!/^[a-f0-9]{40}$/.test(expected)){
+            throw Error('Untrusted PR number or revision; no checkout');
+          }
+          const token=process.env.PRIVATE_REPO_READ_TOKEN;
+          if(!token||token.length<12)throw Error('Read-only private source token missing');
+          async function get(path){
+            const r=await fetch('https://api.github.com/repos/aljamharah/aljamharah'+path,{
+              headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json',
+                'X-GitHub-Api-Version':'2022-11-28'},
+              redirect:'error',signal:AbortSignal.timeout(20000)});
+            if(!r.ok)throw Error('Read-only metadata GET failed HTTP '+r.status);
+            return r.json();
+          }
+          const [p,main]=await Promise.all([get('/pulls/'+pr),get('/branches/main')]);
+          const base=main?.commit?.sha||'';
+          if(p.state!=='open'||p.base?.ref!=='main'||
+             p.base?.repo?.full_name!=='aljamharah/aljamharah'||
+             p.head?.repo?.full_name!=='aljamharah/aljamharah'||
+             p.head?.sha!==expected||p.base?.sha!==base||
+             !/^[a-f0-9]{40}$/.test(base)){
+            throw Error('PR closed, moved, cross-repository, or base main changed');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT,'base_sha='+base+'\nhead_sha='+expected+'\n');
+          console.log('PIN_OK pr='+pr+' head='+expected.slice(0,12)+' main='+base.slice(0,12));
+          NODE
+      - name: Checkout pinned main without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: ${{ steps.pin.outputs.base_sha }}
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: baseline
+          persist-credentials: false
+      - name: Checkout pinned PR head and history without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: ${{ steps.pin.outputs.head_sha }}
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Create ephemeral local merge against pinned main; never push
+        env:
+          BASE_SHA: ${{ steps.pin.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pin.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git -C candidate rev-parse HEAD)" = "$HEAD_SHA"
+          git -C candidate cat-file -e "$BASE_SHA^{commit}"
+          git -C candidate -c user.name='Ephemeral Audit' -c user.email='audit@invalid.example' merge --no-ff --no-edit "$BASE_SHA" >/dev/null
+          echo "Disposable merge completed. No GitHub branch changed."
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install free validation dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml >/dev/null
+      - name: Run complete source, Quran, JMR and CMS foundation checks
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          if ! node scripts/check_site_foundation.mjs >/tmp/private-pr-gate-foundation.log 2>&1; then
+            echo "::error::Virtual-merge foundation regression tests failed"
+            grep '^FAILED:\|^Jamharah technical foundation:' /tmp/private-pr-gate-foundation.log || true
+            exit 1
+          fi
+          grep '^Jamharah technical foundation:' /tmp/private-pr-gate-foundation.log
+      - name: Build independent sanitized baseline and candidate
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs >/tmp/jmr-baseline-build.log 2>&1) || { echo "::error::Baseline build failed"; exit 1; }
+          (cd candidate && node scripts/build_public_site.mjs >/tmp/jmr-candidate-build.log 2>&1) || { echo "::error::Candidate build failed"; exit 1; }
+      - name: Check strict published dist parity unless expressly opted out
+        env:
+          STRICT_DIST_PARITY: ${{ github.event_name != 'workflow_dispatch' || inputs.require_dist_parity == true }}
+        run: |
+          set -euo pipefail
+          if [ "$STRICT_DIST_PARITY" = "true" ]; then
+            (cd candidate && node scripts/validation/compare-public-dist.mjs ../baseline/build-reports/dist-inventory.json build-reports/dist-inventory.json)
+          else
+            echo "::warning::Strict dist parity disabled: manual review of every published output change is MANDATORY."
+          fi
+      - name: Revalidate PR and main unchanged; publish only a summary
+        env:
+          PRIVATE_REPO_READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          BASE_SHA: ${{ steps.pin.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pin.outputs.head_sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {appendFileSync} from 'node:fs';
+          const token=process.env.PRIVATE_REPO_READ_TOKEN;
+          async function get(path){
+            const r=await fetch('https://api.github.com/repos/aljamharah/aljamharah'+path,{
+              headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json'},
+              redirect:'error',signal:AbortSignal.timeout(20000)});
+            if(!r.ok)throw Error('Final private SHA check failed HTTP '+r.status);
+            return r.json();
+          }
+          const pr=process.env.PRIVATE_PR_NUMBER;
+          const [p,main]=await Promise.all([get('/pulls/'+pr),get('/branches/main')]);
+          if(p.state!=='open'||p.head?.sha!==process.env.HEAD_SHA||
+             main?.commit?.sha!==process.env.BASE_SHA){
+            throw Error('PR or main changed during verification: fail closed');
+          }
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '# Private PR exact SHA premerge check\n\n' +
+            '- PR: '+pr+'; current main and head both still pinned\n' +
+            '- Virtual merge: PASS (local and disposable)\n' +
+            '- Source foundation: PASS\n' +
+            '- Independent sanitized builds: PASS\n' +
+            '- Strict dist parity: '+(process.env.STRICT_DIST_PARITY==='true'?'PASS':'DISABLED; review required')+'\n' +
+            '- No merges, file uploads, Cloudflare changes, model calls or paid services\n' +
+            '- This is advisory evidence, not an enforced GitHub required check.\n');
+          console.log('PREMERGE_GATE_OK pr='+pr+' base='+process.env.BASE_SHA.slice(0,12)+
+            ' head='+process.env.HEAD_SHA.slice(0,12));
+          NODE
+      - name: Verify no tracked private source mutation
+        run: |
+          set -euo pipefail
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          echo "Tracked source unchanged; no deployment or remote write."
