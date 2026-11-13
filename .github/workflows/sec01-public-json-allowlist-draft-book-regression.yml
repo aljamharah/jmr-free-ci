@@ -1,4 +1,4 @@
-name: SEC01 exact SHA public JSON allowlist with source draft retention
+name: SEC01 exact SHA JSON export plus book-field and rights-gate full parity
 
 on:
   push:
@@ -31,14 +31,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: b29e76301f264e4c84a923b6c3f56386a44e05e6
+          ref: d7adb516b260b8b440bb6e0084fe6eed5a0cfddc
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: after
       - name: Require exact immutable SHAs
         run: |
           test "$(git -C before rev-parse HEAD)" = "aad574cfa0e399f6aeffdd4c8b8cea2648652269"
-          test "$(git -C after rev-parse HEAD)" = "b29e76301f264e4c84a923b6c3f56386a44e05e6"
+          test "$(git -C after rev-parse HEAD)" = "d7adb516b260b8b440bb6e0084fe6eed5a0cfddc"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -74,7 +74,7 @@ jobs:
           assert.equal(process.env.BEFORE,'0');
           assert.equal(process.env.AFTER,'0');
           assert.equal(a.tests,189,'Baseline test discovery unexpectedly changed');
-          assert.equal(b.tests,194,'Five policy tests must be added and no tests lost');
+          assert.equal(b.tests,197,'Eight policy tests must be present and no tests lost');
           assert.equal(a.tests,a.pass);
           assert.equal(b.tests,b.pass);
           assert.equal(a.fail+b.fail,0);
