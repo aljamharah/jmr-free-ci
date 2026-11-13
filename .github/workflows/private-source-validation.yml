@@ -58,7 +58,7 @@ jobs:
       - name: Confirm exact private branch revision
         working-directory: private-source
         run: |
-          test "$(git rev-parse HEAD)" = "e6b2ff4889fed61fc60e8b7b2a2bf7342bc6ed65"
+          test "$(git rev-parse HEAD)" = "ddcdc6d247540aff581408d70eabd1ef56ea397e"
 
       - name: Check out fixed main revision separately (read-only)
         uses: actions/checkout@v4
@@ -74,13 +74,14 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C canonical-main rev-parse HEAD)" = "0bb1d8cba3f474daad64d43f731919364a444746"
-          test "$(git -C private-source rev-parse HEAD)" = "e6b2ff4889fed61fc60e8b7b2a2bf7342bc6ed65"
+          test "$(git -C private-source rev-parse HEAD)" = "ddcdc6d247540aff581408d70eabd1ef56ea397e"
           git -C private-source fetch --no-tags ../canonical-main HEAD:refs/remotes/integration/main
           test "$(git -C private-source rev-parse refs/remotes/integration/main)" = "0bb1d8cba3f474daad64d43f731919364a444746"
           base="$(git -C private-source merge-base HEAD refs/remotes/integration/main)"
           test -n "$base"
           echo "Integration merge base: $base"
           git -C private-source -c user.name="CI integration" -c user.email="integration@example.invalid" merge --no-commit --no-ff refs/remotes/integration/main
+          git -C private-source merge-base --is-ancestor refs/remotes/integration/main HEAD
           git -C private-source write-tree
           echo "Dry merge succeeded; this runner has no write token for the private source."
           git -C private-source diff --cached --stat | tail -n 30
