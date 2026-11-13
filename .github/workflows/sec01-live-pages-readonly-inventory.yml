@@ -35,14 +35,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 15ca71a60803c0b4a67e5da6d2b01d546c4caa66
+          ref: 9ee32bc66f46991d07a5fcb897336ca94e57cc52
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: source
           persist-credentials: false
 
       - name: Verify reviewed SHA (not branch latest)
         run: |
-          test "$(git -C source rev-parse HEAD)" = "15ca71a60803c0b4a67e5da6d2b01d546c4caa66"
+          test "$(git -C source rev-parse HEAD)" = "9ee32bc66f46991d07a5fcb897336ca94e57cc52"
 
       - uses: actions/setup-node@v4
         with:
