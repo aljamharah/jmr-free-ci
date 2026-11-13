@@ -1,0 +1,87 @@
+name: SEC01 Production one-file exposure fix live GET gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sec01-production-evaluations-route-verified.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Confirm exact production commit and endpoint protection without logging any content
+        env:
+          ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const ACCOUNT=process.env.ACCOUNT,TOKEN=process.env.TOKEN;
+          const approvedCommit='aad574cfa0e399f6aeffdd4c8b8cea2648652269';
+          if(!/^[a-f0-9]{32}$/i.test(ACCOUNT||'')||!TOKEN||TOKEN.length<12)
+            throw Error('Read-only Cloudflare credentials unavailable');
+          const uri='https://api.cloudflare.com/client/v4/accounts/'+ACCOUNT+
+            '/pages/projects/aljamharah/deployments?env=production&per_page=1&page=1';
+          const r=await fetch(uri,{method:'GET',redirect:'error',headers:{Authorization:'Bearer '+TOKEN,Accept:'application/json'},signal:AbortSignal.timeout(12000)});
+          if(!r.ok)throw Error('Production API returned HTTP '+r.status);
+          const data=await r.json();
+          const dep=data?.result?.[0];
+          if(data.success!==true||!dep||dep.latest_stage?.status!=='success'||
+            dep.deployment_trigger?.metadata?.commit_hash!==approvedCommit)
+            throw Error('Production does not yet match exact security-fix commit; no safety claim');
+          const origin='https://aljamharah.pages.dev';
+          async function get(path){
+            return fetch(origin+path,{method:'GET',redirect:'manual',headers:{Accept:'application/json'},
+              signal:AbortSignal.timeout(14000)});
+          }
+          async function bodyBounded(r,max=524288){
+            if(Number(r.headers.get('content-length')||0)>max)return null;
+            let parts=[],n=0,reader=r.body?.getReader();
+            if(!reader)return null;
+            for(;;){
+              const x=await reader.read();if(x.done)break;
+              n+=x.value.byteLength;
+              if(n>max){await reader.cancel();return null}
+              parts.push(Buffer.from(x.value));
+            }
+            return Buffer.concat(parts).toString('utf8');
+          }
+          const privateRoute=await get('/content/jmr/knowledge/evaluations.json');
+          let withheld=false,classification='not_verified';
+          if([403,404].includes(privateRoute.status)){withheld=true;classification='blocked';}
+          else if(privateRoute.status===200 &&
+            ['text/html','application/xhtml+xml'].includes((privateRoute.headers.get('content-type')||'').split(';')[0].toLowerCase().trim())){
+            const home=await get('/');
+            const [a,b]=await Promise.all([bodyBounded(privateRoute),home.status===200?bodyBounded(home):null]);
+            withheld=a!==null&&a===b;
+            classification=withheld?'same_public_homepage_html':'unverified_html';
+          }else classification='unverified_other';
+          if(!withheld)throw Error('Internal evaluation file is not verified withheld in Production');
+          const knowledge=await get('/content/jmr/knowledge/index.json');
+          if(knowledge.status!==200)throw Error('Public JMR knowledge index unavailable');
+          const knowledgeText=await bodyBounded(knowledge);
+          const k=knowledgeText?JSON.parse(knowledgeText):null;
+          if(!Array.isArray(k?.entries)||k.entries.length===0)
+            throw Error('Public JMR knowledge JSON invalid');
+          const poems=await get('/content/poems.json');
+          if(poems.status!==200)throw Error('Public poems endpoint unavailable');
+          const poemsText=await bodyBounded(poems);
+          const p=poemsText?JSON.parse(poemsText):null;
+          if(!Array.isArray(p?.poems)||p.poems.some(x=>x.publication_status!=='published'||Object.hasOwn(x,'editorial_token')))
+            throw Error('Public poem rights/publication checks failed');
+          console.log(JSON.stringify({verified_deployment_commit:approvedCommit,
+            production_deployment:'success',evaluation_file_exposure:'WITHHELD',
+            withheld_classification:classification,public_knowledge_entries:k.entries.length,
+            public_poems:p.poems.length,GET_only:true,model_requests:0,
+            historical_deployments_unchanged:true,SEC01_issue_47_closed:false,
+            response_bodies_logged:false,secrets_logged:false}));
+          NODE
