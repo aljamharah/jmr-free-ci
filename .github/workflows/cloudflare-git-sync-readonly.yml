@@ -40,3 +40,6 @@ jobs:
           ALJAMHARAH_CF_READ_TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
           JMR_PRIVATE_REPO_READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
         run: node scripts/production_git_sync_audit.mjs
+
+      - name: Confirm read-only audit left all tracked CI files unchanged
+        run: git diff --exit-code && git diff --cached --exit-code
