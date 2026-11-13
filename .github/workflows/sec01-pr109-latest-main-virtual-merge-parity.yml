@@ -1,0 +1,110 @@
+name: SEC01 PR109 post-architecture current-main settings allowlist virtual merge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sec01-pr109-latest-main-virtual-merge-parity.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        name: Read only checkout exact current production main
+        with:
+          repository: aljamharah/aljamharah
+          ref: 356cab58d2170131830c4616068f905a31ad07c5
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+      - uses: actions/checkout@v4
+        name: Read only checkout pinned PR109
+        with:
+          repository: aljamharah/aljamharah
+          ref: e9b33bacc9c444fd155beeb7144d3d76211beb44
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 0
+          path: candidate
+      - name: Virtually merge and check exact 3-source-file delta
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "356cab58d2170131830c4616068f905a31ad07c5"
+          test "$(git -C candidate rev-parse HEAD)" = "e9b33bacc9c444fd155beeb7144d3d76211beb44"
+          git -C candidate fetch --no-tags ../baseline 356cab58d2170131830c4616068f905a31ad07c5
+          git -C candidate -c user.name='Read-only Security CI' \
+            -c user.email='sec01@invalid.example' merge --no-ff --no-edit 356cab58d2170131830c4616068f905a31ad07c5 >/dev/null
+          git -C candidate diff --name-status 356cab58d2170131830c4616068f905a31ad07c5 HEAD > /tmp/sec01-pr109-diff
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const actual=readFileSync('/tmp/sec01-pr109-diff','utf8').trim().split('\n').sort();
+          const expected=[
+            'M\tscripts/build_public_site.mjs',
+            'M\tscripts/security/public-content-export-policy.mjs',
+            'M\ttests/public-content-export-policy.test.mjs'
+          ].sort();
+          assert.deepEqual(actual,expected);
+          console.log('Only public site settings allowlist, its invocation and its tests changed.');
+          NODE
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install free source checker dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Build independent sanitized dist trees before Node test discovery
+        run: |
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+      - name: Require both complete Node test suites pass with exactly 3 additions
+        shell: bash
+        run: |
+          set +e
+          (cd baseline && node --test >../baseline.tap 2>&1)
+          b=$?
+          (cd candidate && node --test >../candidate.tap 2>&1)
+          c=$?
+          set -e
+          BASE="$b" CAND="$c" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const score=path=>{
+            const body=readFileSync(path,'utf8');
+            const get=k=>Number(body.match(new RegExp('^# '+k+' (\\d+)$','m'))?.[1]??-1);
+            return {tests:get('tests'),pass:get('pass'),fail:get('fail')};
+          };
+          const b=score('baseline.tap'),c=score('candidate.tap');
+          console.log(JSON.stringify({baseline:b,candidate:c,baseline_exit:process.env.BASE,candidate_exit:process.env.CAND}));
+          assert.equal(process.env.BASE,'0');
+          assert.equal(process.env.CAND,'0');
+          assert.equal(b.tests,201);
+          assert.equal(c.tests,204);
+          assert.equal(b.pass,b.tests);
+          assert.equal(c.pass,c.tests);
+          assert.equal(b.fail+c.fail,0);
+          NODE
+      - name: Require 11 public-export tests, 10 foundation checks and Python validators
+        working-directory: candidate
+        run: |
+          node --test tests/public-content-export-policy.test.mjs
+          node scripts/check_site_foundation.mjs
+          python scripts/validate_library.py
+          python -m unittest discover -s tests -p 'test_*.py'
+      - name: Require strict public static path/bytes/SHA parity and source cleanliness
+        run: |
+          (cd candidate && node scripts/validation/compare-public-dist.mjs \
+            ../baseline/build-reports/dist-inventory.json build-reports/dist-inventory.json)
+          git -C candidate diff --exit-code
+          git -C baseline diff --exit-code
+          git -C candidate diff --cached --exit-code
+          git -C baseline diff --cached --exit-code
+          echo 'PASS: site settings fail-closed on unreviewed fields; 874 unchanged public files. No resource changes or models called.'
