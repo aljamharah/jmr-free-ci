@@ -1,0 +1,130 @@
+name: SEC01 PR109 exact public CMS site-settings gate and dist parity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sec01-pr109-site-settings-no-leak-parity.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-pr109-site-settings-parity
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Read-only checkout of pinned main
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 51859f4bf08c3fd05a973525807f2ef5cbc05760
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+      - name: Read-only checkout of exact PR109 SHA
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: e9b33bacc9c444fd155beeb7144d3d76211beb44
+          fetch-depth: 0
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+      - name: Local virtual merge and exact three-file diff; never push
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "51859f4bf08c3fd05a973525807f2ef5cbc05760"
+          test "$(git -C candidate rev-parse HEAD)" = "e9b33bacc9c444fd155beeb7144d3d76211beb44"
+          git -C candidate fetch --no-tags ../baseline 51859f4bf08c3fd05a973525807f2ef5cbc05760
+          git -C candidate -c user.name='Non-destructive Security CI' -c user.email='audit@invalid.example' merge --no-ff --no-edit 51859f4bf08c3fd05a973525807f2ef5cbc05760 > /dev/null
+          git -C candidate diff --name-status --no-renames 51859f4bf08c3fd05a973525807f2ef5cbc05760 HEAD > /tmp/sec01-109-diff.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const files=readFileSync('/tmp/sec01-109-diff.txt','utf8').trim().split('\n').sort();
+          const expected=[
+            'M\tscripts/build_public_site.mjs',
+            'M\tscripts/security/public-content-export-policy.mjs',
+            'M\ttests/public-content-export-policy.test.mjs'
+          ].sort();
+          assert.deepEqual(files,expected,'Unexpected source change in PR109');
+          console.log('Only 3 approved CMS export validation paths; no application/UI/content mutations.');
+          NODE
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install free validator dependencies only
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Validate policy syntax and 11 dedicated tests
+        working-directory: candidate
+        run: |
+          node --check scripts/security/public-content-export-policy.mjs
+          node --check scripts/build_public_site.mjs
+          node --check tests/public-content-export-policy.test.mjs
+          node --test tests/public-content-export-policy.test.mjs
+      - name: Simulate private CMS key in isolated source; builder must fail closed
+        working-directory: candidate
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync,writeFileSync} from 'node:fs';
+          import {spawnSync} from 'node:child_process';
+          const filename='content/settings/site.json';
+          const original=readFileSync(filename);
+          try {
+            const settings=JSON.parse(original.toString('utf8'));
+            settings.synthetic_private_setting='test-placeholder';
+            writeFileSync(filename,JSON.stringify(settings));
+            const build=spawnSync(process.execPath,['scripts/build_public_site.mjs'],{encoding:'utf8',timeout:60000});
+            assert.notEqual(build.status,0,'Private CMS setting should make build fail');
+            console.log('PASS: injected unreviewed CMS key blocked; no source values logged.');
+          } finally {writeFileSync(filename,original);}
+          NODE
+      - name: Build untouched baseline and candidate independently
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+      - name: Full Node and foundation tests on virtual merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && node --test > /tmp/pr109-before-node.tap)
+          (cd candidate && node --test > /tmp/pr109-after-node.tap)
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const score=path=>{
+            const t=readFileSync(path,'utf8');
+            const n=k=>Number(t.match(new RegExp('^# '+k+' (\\d+)$','m'))?.[1]??-1);
+            return {tests:n('tests'),pass:n('pass'),fail:n('fail')};
+          };
+          const before=score('/tmp/pr109-before-node.tap'),after=score('/tmp/pr109-after-node.tap');
+          console.log(JSON.stringify({before,after}));
+          assert.equal(before.tests,before.pass);
+          assert.equal(after.tests,after.pass);
+          assert.equal(after.tests,before.tests+3,'Exactly 3 new CMS settings guard tests expected');
+          assert.equal(before.fail+after.fail,0);
+          NODE
+          (cd candidate && node scripts/check_site_foundation.mjs)
+      - name: Strict path size SHA-256 parity; no published output change
+        working-directory: candidate
+        run: |
+          node scripts/validation/compare-public-dist.mjs ../baseline/build-reports/dist-inventory.json build-reports/dist-inventory.json
+      - name: Verify clean tracked source and no production mutation
+        run: |
+          set -euo pipefail
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          git -C baseline diff --cached --exit-code
+          git -C candidate diff --cached --exit-code
+          echo 'PR109 source-only, no Cloudflare API, deployment, billing, AI model, or deletion.'
