@@ -31,14 +31,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: d7adb516b260b8b440bb6e0084fe6eed5a0cfddc
+          ref: 25367bf11efb0d325d362dbca4a71a5bc02e75c7
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: after
       - name: Require exact immutable SHAs
         run: |
           test "$(git -C before rev-parse HEAD)" = "aad574cfa0e399f6aeffdd4c8b8cea2648652269"
-          test "$(git -C after rev-parse HEAD)" = "d7adb516b260b8b440bb6e0084fe6eed5a0cfddc"
+          test "$(git -C after rev-parse HEAD)" = "25367bf11efb0d325d362dbca4a71a5bc02e75c7"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
