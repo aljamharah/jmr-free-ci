@@ -94,6 +94,7 @@ jobs:
               throw Error('Public poems changed or included unpublished records');
             summary.poems_public_json_available++;
             const privacy=await request(origin,'/privacy.html');
+            console.log(JSON.stringify({project,privacy_http_status:privacy.status,privacy_redirect:privacy.status>=300&&privacy.status<400}));
             if(privacy.status!==200)throw Error('Privacy notice not available in candidate Preview');
             summary.privacy_page_available++;
           }
