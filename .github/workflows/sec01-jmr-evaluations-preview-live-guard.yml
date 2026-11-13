@@ -93,9 +93,16 @@ jobs:
             if(!Array.isArray(poemsData.poems)||poemsData.poems.some(p=>p.publication_status!=='published'))
               throw Error('Public poems changed or included unpublished records');
             summary.poems_public_json_available++;
-            const privacy=await request(origin,'/privacy.html');
-            console.log(JSON.stringify({project,privacy_http_status:privacy.status,privacy_redirect:privacy.status>=300&&privacy.status<400}));
-            if(privacy.status!==200)throw Error('Privacy notice not available in candidate Preview');
+            let privacy=await request(origin,'/privacy.html');
+            if([301,302,307,308].includes(privacy.status)){
+              const location=privacy.headers.get('location');
+              if(!location)throw Error('Privacy redirect lacked a location');
+              const target=new URL(location,origin+'/privacy.html');
+              if(target.origin!==origin||!['/privacy.html','/privacy','/privacy/'].includes(target.pathname)||
+                target.search||target.hash)throw Error('Privacy redirect left expected same-origin page');
+              privacy=await request(origin,target.pathname);
+            }
+            if(privacy.status!==200)throw Error('Privacy notice not available in candidate Preview: HTTP '+privacy.status);
             summary.privacy_page_available++;
           }
           console.log(JSON.stringify({scope:'exact-candidate-preview-only',GET_only:true,
