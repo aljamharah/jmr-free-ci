@@ -1,0 +1,50 @@
+name: JMR API runtime guards (no model requests)
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/jmr-runtime-guards-no-model.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  no-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Verify method, origin, runtime binding and fail-closed behavior without an AI prompt
+        run: |
+          node --input-type=module <<'NODE'
+          let failed = 0, passed = 0;
+          const matrix = [
+            {name:"production",origin:"https://aljamharah.pages.dev",ai:true},
+            {name:"production-project-preview",origin:"https://3a239e79.aljamharah.pages.dev",ai:true},
+            {name:"isolated-staging",origin:"https://aljamharah-staging.pages.dev",ai:false}
+          ];
+          async function test(name, origin, method, expected, headers, body) {
+            const url=new URL("/api/jmr",origin);
+            const response=await fetch(url,{method,headers,body,redirect:"error",signal:AbortSignal.timeout(20000)});
+            const ok=response.status===expected;
+            if(ok)passed++;else failed++;
+            console.log("JMR_GUARD "+name+" "+method+" expected="+expected+
+                        " actual="+response.status+" "+(ok?"PASS":"FAIL"));
+          }
+          for(const row of matrix) {
+            // GET always exits before AI and rate limits.
+            await test(row.name+":method",row.origin,"GET",405,{},undefined);
+            // Mismatched Origin exits BEFORE AI and DO/KV; no quota write or model call.
+            await test(row.name+":cross-origin",row.origin,"POST",403,
+              {"Content-Type":"application/json","Origin":"https://invalid-origin.invalid"},"{}");
+            // Valid JSON with no question exits before any model call.
+            // With AI + rate limiter ready: 400. Isolated staging without AI: 503.
+            await test(row.name+":empty-message",row.origin,"POST",row.ai?400:503,
+              {"Content-Type":"application/json"},"{}");
+          }
+          const {appendFileSync}=await import("node:fs");
+          const summary="JMR API no-model runtime guard: "+passed+"/"+(passed+failed)+" passed.\n"+
+                        "No user text, no model request, no production config mutation. "+
+                        "Empty-message checks use at most one rate-limit attempt per AI-enabled origin.\n";
+          if(process.env.GITHUB_STEP_SUMMARY)appendFileSync(process.env.GITHUB_STEP_SUMMARY,summary);
+          console.log("JMR_GUARD_SUMMARY pass="+passed+" fail="+failed);
+          if(failed>0)process.exitCode=1;
+          NODE
