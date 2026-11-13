@@ -26,7 +26,7 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           const ACCOUNT=process.env.ACCOUNT,TOKEN=process.env.TOKEN;
-          const approvedCommit='aad574cfa0e399f6aeffdd4c8b8cea2648652269';
+          const approvedCommit='51859f4bf08c3fd05a973525807f2ef5cbc05760';
           if(!/^[a-f0-9]{32}$/i.test(ACCOUNT||'')||!TOKEN||TOKEN.length<12)
             throw Error('Read-only Cloudflare credentials unavailable');
           const uri='https://api.cloudflare.com/client/v4/accounts/'+ACCOUNT+
