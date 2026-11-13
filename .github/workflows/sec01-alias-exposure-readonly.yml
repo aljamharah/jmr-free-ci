@@ -1,0 +1,184 @@
+name: SEC01 reported-alias historical exposure check (GET only)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sec01-alias-exposure-readonly.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  aliases:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Audit only API-reported, project-verified alias URLs without logging addresses or content
+        env:
+          ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const account=process.env.ACCOUNT,token=process.env.TOKEN;
+          if(!/^[a-f0-9]{32}$/i.test(account||'')||!(token?.length>=12))throw Error('Missing existing read credential; zero requests sent');
+          const PROJECTS=['aljamharah','aljamharah-staging'];
+          const ENVS=['production','preview'];
+          const PATHS=['/content/poems.json','/content/poems%2Ejson'];
+          const permitted=new Set(['slug','title','poet_slug','era_id','collection_id','verse_count',
+            'poem_subject','poem_type','meter','rhyme_letter','source_reference','source_url',
+            'text_status','rights_status','publication_status','body']);
+          const allowedRights=new Set(['public_domain','permission_granted']);
+          const api='https://api.cloudflare.com/client/v4/accounts/'+account+'/pages/projects/';
+          async function cfGet(path){
+            const r=await fetch(api+path,{method:'GET',redirect:'error',
+              headers:{Authorization:'Bearer '+token,Accept:'application/json'},
+              signal:AbortSignal.timeout(20000)});
+            if(!r.ok)throw Error('Cloudflare read failed HTTP '+r.status);
+            const j=await r.json();
+            if(j?.success!==true)throw Error('Cloudflare API declined GET');
+            return j;
+          }
+          function permittedOrigin(raw,project,domains){
+            if(typeof raw!=='string'||raw.length>1024)return null;
+            try{
+              const u=new URL(raw);
+              const suffix=project+'.pages.dev';
+              const sub=u.hostname.endsWith('.'+suffix)?u.hostname.slice(0,-suffix.length-1):'';
+              const pages=u.hostname===suffix||(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(sub)&&sub.length>0);
+              const custom=domains.has(u.hostname);
+              if(u.protocol!=='https:'||u.username||u.password||u.port||u.pathname!=='/'||u.search||u.hash||(!pages&&!custom))return null;
+              return u.origin;
+            }catch{return null}
+          }
+          async function readBounded(r,maxBytes=786432){
+            const len=Number(r.headers.get('content-length')||'0');
+            if(len>maxBytes)return null;
+            const reader=r.body?.getReader();
+            if(!reader)return null;
+            let n=0;const chunks=[];
+            while(true){
+              const chunk=await reader.read();
+              if(chunk.done)break;
+              n+=chunk.value.byteLength;
+              if(n>maxBytes){await reader.cancel();return null;}
+              chunks.push(Buffer.from(chunk.value));
+            }
+            return Buffer.concat(chunks).toString('utf8');
+          }
+          async function probe(origin,path){
+            let r;
+            try{r=await fetch(origin+path,{method:'GET',redirect:'manual',
+              headers:{Accept:'application/json'},signal:AbortSignal.timeout(12000)})}
+            catch{return 'unverified_network'}
+            if(r.status===403||r.status===404)return 'blocked';
+            if(r.status!==200)return 'unverified_http';
+            let raw;
+            try{raw=await readBounded(r)}catch{return 'unverified_body'}
+            if(raw===null)return 'unverified_size';
+            let j;
+            try{j=JSON.parse(raw)}catch{
+              const mime=(r.headers.get('content-type')||'').split(';',1)[0].toLowerCase().trim();
+              if(mime!=='text/html')return 'unverified_nonjson';
+              try{
+                const home=await fetch(origin+'/',{method:'GET',redirect:'manual',
+                  signal:AbortSignal.timeout(12000)});
+                if(home.status===200 && await readBounded(home)===raw)return 'html_home_fallback';
+              }catch{}
+              return 'unverified_html_other';
+            }
+            if(!Array.isArray(j?.poems)||j.poems.length===0)return 'unverified_schema';
+            for(const row of j.poems){
+              if(!row||typeof row!=='object'||row.publication_status!=='published')
+                return 'suspected_editorial_exposure';
+              if(Object.keys(row).some(k=>!permitted.has(k)))
+                return 'suspected_editorial_exposure';
+              if(typeof row.body==='string'&&row.body.trim()&&
+                (!allowedRights.has(row.rights_status)||row.text_status!=='local_text'))
+                return 'suspected_editorial_exposure';
+            }
+            return 'allowlisted_public';
+          }
+          const metrics={},scans=[],seenOrigins=new Set();
+          let missingAliasList=0,invalidAliasUrls=0,aliasDeclaredCount=0,duplicateAliases=0,unstablePagination=0;
+          for(const project of PROJECTS){
+            const meta=(await cfGet(project)).result;
+            if(meta?.name!==project||!Array.isArray(meta.domains))throw Error('Project domains not verifiable');
+            const domains=new Set(meta.domains.map(x=>typeof x==='string'?x.toLowerCase():'')); 
+            if(domains.has(''))throw Error('Invalid project domain');
+            for(const env of ENVS){
+              const key=project+'/'+env;
+              metrics[key]={deployments_seen:0,listed_aliases:0,unique_aliases:0,
+                checked_routes:0,allowlisted_public:0,blocked:0,html_home_fallback:0,
+                suspected_editorial_exposure:0,unverified:0,unverified_reason_counts:{}};
+              const first=await cfGet(project+'/deployments?env='+env+'&per_page=25&page=1');
+              let pages=first.result_info?.total_pages;
+              if(!Number.isSafeInteger(pages)||pages<0||pages>100)throw Error('Invalid deployment pagination');
+              const seenIds=new Set();
+              for(let page=1;page<=Math.max(pages,1);page++){
+                const resp=page===1?first:await cfGet(project+'/deployments?env='+env+'&per_page=25&page='+page);
+                if(!Array.isArray(resp.result)||resp.result_info?.page!==page)throw Error('Invalid page payload');
+                if(resp.result_info.total_pages!==pages)unstablePagination++;
+                pages=Math.max(pages,Math.min(100,resp.result_info.total_pages||0));
+                for(const d of resp.result){
+                  if(typeof d?.id!=='string'||seenIds.has(d.id)){unstablePagination++;continue}
+                  seenIds.add(d.id);
+                  metrics[key].deployments_seen++;
+                  if(d.aliases==null){missingAliasList++;continue}
+                  if(!Array.isArray(d.aliases))throw Error('Malformed alias list');
+                  for(const raw of d.aliases){
+                    metrics[key].listed_aliases++;aliasDeclaredCount++;
+                    const origin=permittedOrigin(raw,project,domains);
+                    if(!origin){invalidAliasUrls++;continue}
+                    if(seenOrigins.has(origin)){duplicateAliases++;continue}
+                    seenOrigins.add(origin);
+                    metrics[key].unique_aliases++;
+                    scans.push({key,origin});
+                  }
+                }
+              }
+            }
+          }
+          let cursor=0;
+          async function worker(){
+            while(true){
+              const pos=cursor++;
+              if(pos>=scans.length)return;
+              const {key,origin}=scans[pos],m=metrics[key];
+              for(const path of PATHS){
+                const outcome=await probe(origin,path);
+                m.checked_routes++;
+                if(Object.hasOwn(m,outcome))m[outcome]++;
+                else {
+                  m.unverified++;
+                  m.unverified_reason_counts[outcome]=(m.unverified_reason_counts[outcome]||0)+1;
+                }
+              }
+            }
+          }
+          await Promise.all(Array.from({length:5},()=>worker()));
+          const sum=(key)=>Object.values(metrics).reduce((n,m)=>n+(m[key]||0),0);
+          console.log(JSON.stringify({
+            scope:'API-reported aliases only', GET_only:true,
+            deployment_records_seen:sum('deployments_seen'),
+            missing_alias_lists:missingAliasList,
+            declared_alias_items:aliasDeclaredCount,unique_alias_origins:scans.length,
+            duplicate_alias_items:duplicateAliases,invalid_alias_urls:invalidAliasUrls,
+            pagination_drift_warnings:unstablePagination,
+            checked_routes:sum('checked_routes'),
+            allowed_json:sum('allowlisted_public'),blocked:sum('blocked'),
+            html_home_fallback:sum('html_home_fallback'),
+            suspected_editorial_exposure:sum('suspected_editorial_exposure'),
+            unverified:sum('unverified'),details:metrics,
+            alias_coverage_complete:missingAliasList===0&&unstablePagination===0,
+            all_historic_paths_audited:false,deletion_approved:false
+          },null,2));
+          console.log('No aliases, hosts, domains, URLs, IDs, source content, tokens, hashes, editorial fields, or secrets logged or uploaded.');
+          if(sum('suspected_editorial_exposure')||sum('unverified')||invalidAliasUrls||unstablePagination)
+            throw Error('Reported alias audit needs further review; no permission to delete or change deployments');
+          NODE
