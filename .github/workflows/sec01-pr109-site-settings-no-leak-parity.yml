@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 51859f4bf08c3fd05a973525807f2ef5cbc05760
+          ref: 356cab58d2170131830c4616068f905a31ad07c5
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: baseline
@@ -39,11 +39,11 @@ jobs:
       - name: Local virtual merge and exact three-file diff; never push
         run: |
           set -euo pipefail
-          test "$(git -C baseline rev-parse HEAD)" = "51859f4bf08c3fd05a973525807f2ef5cbc05760"
+          test "$(git -C baseline rev-parse HEAD)" = "356cab58d2170131830c4616068f905a31ad07c5"
           test "$(git -C candidate rev-parse HEAD)" = "e9b33bacc9c444fd155beeb7144d3d76211beb44"
-          git -C candidate fetch --no-tags ../baseline 51859f4bf08c3fd05a973525807f2ef5cbc05760
-          git -C candidate -c user.name='Non-destructive Security CI' -c user.email='audit@invalid.example' merge --no-ff --no-edit 51859f4bf08c3fd05a973525807f2ef5cbc05760 > /dev/null
-          git -C candidate diff --name-status --no-renames 51859f4bf08c3fd05a973525807f2ef5cbc05760 HEAD > /tmp/sec01-109-diff.txt
+          git -C candidate fetch --no-tags ../baseline 356cab58d2170131830c4616068f905a31ad07c5
+          git -C candidate -c user.name='Non-destructive Security CI' -c user.email='audit@invalid.example' merge --no-ff --no-edit 356cab58d2170131830c4616068f905a31ad07c5 > /dev/null
+          git -C candidate diff --name-status --no-renames 356cab58d2170131830c4616068f905a31ad07c5 HEAD > /tmp/sec01-109-diff.txt
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import {readFileSync} from 'node:fs';
