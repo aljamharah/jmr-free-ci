@@ -2,7 +2,7 @@ name: Validate private JMR source
 
 on:
   push:
-    branches: [main]
+    branches: [ci/technical-closeout-2026-11-13]
   workflow_dispatch:
     inputs:
       preview_url:
@@ -22,12 +22,12 @@ permissions:
 # The fine-grained token must have Contents: Read-only on aljamharah/aljamharah.
 
 concurrency:
-  group: jmr-private-source-validation
+  group: jmr-private-source-validation-closeout
   cancel-in-progress: true
 
 jobs:
   validate:
-    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/main'
+    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/ci/technical-closeout-2026-11-13'
     name: Validate canonical private repository
     runs-on: ubuntu-latest
     steps:
@@ -49,7 +49,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: jmr/preview-rate-limit-2026-11-10
+          ref: maintenance/technical-closeout-2026-11-13
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: private-source
           fetch-depth: 1
@@ -79,6 +79,13 @@ jobs:
       - name: Run private JMR API and Quran tests
         working-directory: private-source
         run: npm test
+
+      - name: Verify public dist, full-file SHA inventory, and navigation links
+        working-directory: private-source
+        run: |
+          node scripts/test_public_site_build.mjs
+          node scripts/audit_site_links.mjs
+          node scripts/test_header_navigation.mjs
 
       - name: Build and validate published poet biographies
         working-directory: private-source
