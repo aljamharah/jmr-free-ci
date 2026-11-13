@@ -1,4 +1,4 @@
-name: Production post-merge poet/library CLS and responsive smoke
+name: PR114 production library/poets live CLS 5 widths
 on:
   push:
     branches: [ci/nov13-current-production-cls-20261113]
@@ -51,6 +51,10 @@ jobs:
               assert.equal(record.cards,path.includes('library')?6:11);
               assert.equal(record.overflow,0);
               assert.equal(record.errors,0);
+              if(path==='/library.html'){
+                assert.equal(await page.locator('link[rel="preload"][href*="J7aRnpd8CGxBHpUrtLMA7w.woff2"]').count(),1,'Production missing PR114 preload');
+                if(width===320)assert.ok(record.cls<=0.1,'Production library 320px CLS exceeds good threshold: '+record.cls);
+              }
               await context.close();
             }
             const low=results.filter(r=>r.width===390);
