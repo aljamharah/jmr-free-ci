@@ -47,6 +47,12 @@ jobs:
           python-version: '3.12'
       - name: Install only free local test dependencies
         run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Check security policy and test syntax before any build
+        working-directory: after
+        run: |
+          node --check scripts/security/public-content-export-policy.mjs
+          node --check tests/public-content-export-policy.test.mjs
+          node --check scripts/build_public_site.mjs
       - name: Build independent sanitized public distributions
         run: |
           (cd before && node scripts/build_public_site.mjs)
@@ -69,7 +75,7 @@ jobs:
             return {tests:field('tests'),pass:field('pass'),fail:field('fail')};
           };
           const a=score('before-node.tap'),b=score('after-node.tap');
-          const failedTitles=[...readFileSync('after-node.tap','utf8').matchAll(/^not ok \\d+ - (.*)$/gm)]
+          const failedTitles=[...readFileSync('after-node.tap','utf8').matchAll(/^[ ]*not ok [0-9]+ - (.*)$/gm)]
             .map(m=>m[1].slice(0,160));
           if(failedTitles.length)console.log(JSON.stringify({candidate_failed_test_names:failedTitles}));
           console.log(JSON.stringify({baseline:a,candidate:b,baseline_ok:process.env.BEFORE==='0',
