@@ -1,7 +1,7 @@
-name: Verify Jamharah Production (read-only)
+name: Verify new PR81 Jamharah Production (read-only)
 on:
   push:
-    branches: [ci/production-verification-2026-11-13]
+    branches: [ci/post-pr81-production-smoke-2026-11-13]
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   live-read-only:
-    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/ci/production-verification-2026-11-13'
+    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/ci/post-pr81-production-smoke-2026-11-13'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -53,6 +53,11 @@ jobs:
           for(const restricted of ["/admin/","/api/","/content/books/books/"])
              assert.ok(robots.includes("Disallow: "+restricted),"Missing robots instruction "+restricted);
           checks+=3;
+          const optimized=await get("/assets/jamharah-logo-display-1280.webp");
+          assert.match(optimized.headers.get("content-type")||"",/image\/webp/);
+          const imageBytes=(await optimized.arrayBuffer()).byteLength;
+          assert.ok(imageBytes<350000,"Optimized logo exceeds lossless variant budget");
+          checks+=2;
           const css=await(await get("/assets/jmr-fidelity.css")).text();
           assert.ok(css.includes("jmr-reference-top::before{inset-inline:-12px}"),"Final JMR mobile glow correction missing in Production");
           checks++;
