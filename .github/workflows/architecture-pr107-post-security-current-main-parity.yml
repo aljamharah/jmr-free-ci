@@ -1,0 +1,135 @@
+name: Architecture PR107 current main isolated test relocation parity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/architecture-pr107-post-security-current-main-parity.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-pr107-current-main
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout latest reviewed main source
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 51859f4bf08c3fd05a973525807f2ef5cbc05760
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+
+      - name: Checkout exact PR107 candidate with full Git history
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 987cab06a0ab6d43a31f553f46f08210f346a09f
+          fetch-depth: 0
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+
+      - name: Virtual merge and exact source-movement signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "51859f4bf08c3fd05a973525807f2ef5cbc05760"
+          test "$(git -C candidate rev-parse HEAD)" = "987cab06a0ab6d43a31f553f46f08210f346a09f"
+          git -C candidate fetch --no-tags ../baseline 51859f4bf08c3fd05a973525807f2ef5cbc05760
+          git -C candidate -c user.name='Read-only Architecture QA' \
+            -c user.email='architecture@invalid.example' merge --no-ff --no-edit 51859f4bf08c3fd05a973525807f2ef5cbc05760 >/dev/null
+          git -C candidate diff --name-status --no-renames 51859f4bf08c3fd05a973525807f2ef5cbc05760 HEAD >/tmp/phase3-files.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const actual=readFileSync('/tmp/phase3-files.txt','utf8').trim().split('\n').sort();
+          const expected=[
+            'D\ttests/sec01-readonly-deployments.test.mjs',
+            'A\ttests/security/sec01-readonly-deployments.test.mjs',
+            'M\tdocs/security/SEC01-READONLY-DEPLOYMENT-AUDIT-2026-11-13-AR.md'
+          ].sort();
+          assert.deepEqual(actual,expected);
+          const oldTest=readFileSync('baseline/tests/sec01-readonly-deployments.test.mjs','utf8');
+          const newTest=readFileSync('candidate/tests/security/sec01-readonly-deployments.test.mjs','utf8');
+          assert.equal(newTest,oldTest.replace('../scripts/security/audit-pages-deployments.mjs',
+            '../../scripts/security/audit-pages-deployments.mjs'));
+          const originalDoc=readFileSync('baseline/docs/security/SEC01-READONLY-DEPLOYMENT-AUDIT-2026-11-13-AR.md','utf8');
+          const movedDoc=readFileSync('candidate/docs/security/SEC01-READONLY-DEPLOYMENT-AUDIT-2026-11-13-AR.md','utf8');
+          assert.equal(movedDoc,originalDoc.replace('tests/sec01-readonly-deployments.test.mjs',
+            'tests/security/sec01-readonly-deployments.test.mjs'));
+          console.log('Exactly one test relocated and one documentation path corrected.');
+          NODE
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install free source test dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+
+      - name: Run security audit tests at new source path
+        working-directory: candidate
+        run: node --test tests/security/sec01-readonly-deployments.test.mjs
+
+      - name: Independently build two public sanitized trees
+        shell: bash
+        run: |
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+
+      - name: Run complete Node discovery in BOTH trees
+        shell: bash
+        run: |
+          set +e
+          (cd baseline && node --test >../before.tap 2>&1)
+          a=$?
+          (cd candidate && node --test >../after.tap 2>&1)
+          b=$?
+          set -e
+          BASE="$a" CAND="$b" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const score=p=>{
+            const t=readFileSync(p,'utf8');
+            const g=k=>Number(t.match(new RegExp('^# '+k+' (\\d+)$','m'))?.[1]??-1);
+            return {tests:g('tests'),pass:g('pass'),fail:g('fail')};
+          };
+          const before=score('before.tap'),after=score('after.tap');
+          console.log(JSON.stringify({before,after,baselineExit:process.env.BASE,candidateExit:process.env.CAND}));
+          assert.equal(process.env.BASE,'0');
+          assert.equal(process.env.CAND,'0');
+          assert.ok(before.tests>=201);
+          assert.deepEqual(after,before,'Relocation changed Node test discovery or results');
+          assert.equal(after.tests,after.pass);
+          NODE
+
+      - name: Full technical foundation and Python source checks
+        working-directory: candidate
+        run: |
+          node scripts/check_site_foundation.mjs
+          python scripts/validate_library.py
+          python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Strict static public dist file, path and SHA256 parity
+        working-directory: candidate
+        run: node scripts/validation/compare-public-dist.mjs ../baseline/build-reports/dist-inventory.json build-reports/dist-inventory.json
+
+      - name: Preserve all tracked source files, no remote writes
+        run: |
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          git -C baseline diff --cached --exit-code
+          git -C candidate diff --cached --exit-code
+          echo 'PASS: PR107 only test directory relocation, zero runtime changes and no Cloudflare resource mutation.'
