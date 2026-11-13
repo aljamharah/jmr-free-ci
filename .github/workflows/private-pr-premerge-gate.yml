@@ -1,9 +1,5 @@
 name: Private PR SHA-locked premerge gate (read-only)
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/private-pr-premerge-gate.yml"
   workflow_dispatch:
     inputs:
       pr_number:
@@ -30,14 +26,14 @@ concurrency:
   cancel-in-progress: false
 jobs:
   gate:
-    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      PRIVATE_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '107' }}
-      EXPECTED_HEAD_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_head_sha || '987cab06a0ab6d43a31f553f46f08210f346a09f' }}
-      EXPECTED_HEAD_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.head_branch || 'architecture/phase3-sec01-audit-test-2026-11-13' }}
-      STRICT_DIST_PARITY: ${{ github.event_name != 'workflow_dispatch' || inputs.require_dist_parity == true }}
+      PRIVATE_PR_NUMBER: ${{ inputs.pr_number }}
+      EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+      EXPECTED_HEAD_BRANCH: ${{ inputs.head_branch }}
+      STRICT_DIST_PARITY: ${{ inputs.require_dist_parity == true }}
     steps:
       - name: Pin PR Git ref, same-repository head branch and current main via Contents Read token
         id: pin
