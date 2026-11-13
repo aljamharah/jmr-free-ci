@@ -59,3 +59,47 @@ jobs:
         run: |
           test -z "$(git -C before status --porcelain --untracked-files=no)"
           test -z "$(git -C after status --porcelain --untracked-files=no)"
+
+      - name: GET-only exact Cloudflare Preview security and public content smoke
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          const origins=[
+            "https://7561f2c7.aljamharah.pages.dev",
+            "https://582a0577.aljamharah-staging.pages.dev"
+          ];
+          async function fetchSameOrigin(origin,path){
+            let url=new URL(path,origin);
+            for(let hop=0;hop<4;hop++){
+              const r=await fetch(url,{method:"GET",redirect:"manual",signal:AbortSignal.timeout(20000)});
+              if([301,302,307,308].includes(r.status)){
+                const location=r.headers.get("location");
+                assert.ok(location,"Redirect without Location");
+                const next=new URL(location,url);
+                assert.equal(next.origin,new URL(origin).origin,"Unexpected off-origin redirect");
+                url=next;continue;
+              }
+              const raw=await r.text();
+              assert.ok(raw.length<=3000000,"Unexpected oversized response");
+              return {status:r.status,mime:(r.headers.get("content-type")||"").split(";")[0],raw};
+            }
+            throw Error("Excessive redirects");
+          }
+          for(const origin of origins){
+            const home=await fetchSameOrigin(origin,"/");
+            assert.equal(home.status,200,"Missing public home");
+            const evaluation=await fetchSameOrigin(origin,"/content/jmr/knowledge/evaluations.json");
+            const safe=([403,404].includes(evaluation.status)) ||
+              (evaluation.status===200 && evaluation.mime==="text/html" && evaluation.raw===home.raw);
+            assert.equal(safe,true,"Internal JMR evaluation data exposed in deployed Preview");
+            const knowledge=await fetchSameOrigin(origin,"/content/jmr/knowledge/index.json");
+            assert.equal(knowledge.status,200,"Public knowledge index missing");
+            const json=JSON.parse(knowledge.raw);
+            assert.ok(json && typeof json==="object","Public knowledge payload invalid");
+            const books=await fetchSameOrigin(origin,"/content/books/index.json");
+            assert.equal(books.status,200,"Books index missing");
+            const listed=JSON.parse(books.raw);
+            assert.ok(Array.isArray(listed.books),"Books index shape invalid");
+            console.log("SEC01_ALLOWLIST_PREVIEW_GET=PASS project="+new URL(origin).hostname.split(".").slice(-3).join("."));
+          }
+          NODE
