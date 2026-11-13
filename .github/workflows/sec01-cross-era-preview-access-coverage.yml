@@ -1,0 +1,127 @@
+name: SEC01 GET-only cross-era Pages preview Access coverage
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sec01-cross-era-preview-access-coverage.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-cross-era-preview-access
+  cancel-in-progress: false
+
+jobs:
+  coverage:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require authentication for selected historical and recent immutable URLs and paths
+        env:
+          ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const account=process.env.ACCOUNT,token=process.env.TOKEN;
+          assert.match(account||'',/^[a-f0-9]{32}$/i,'Read-only Cloudflare account missing');
+          assert.ok(token&&token.length>=12,'Read-only Cloudflare token missing');
+          const projects=['aljamharah','aljamharah-staging'];
+          const paths=['/','/content/jmr/knowledge/evaluations.json',
+            '/.github/workflows/validate-jmr-knowledge.yml','/database/schema.sql'];
+          const safeGet=async(url,options={})=>fetch(url,{
+            method:'GET',redirect:'manual',signal:AbortSignal.timeout(17000),...options
+          });
+          const expectedLogin=(location,origin)=>{
+            if(!location)return false;
+            try{
+              const target=new URL(location,origin);
+              return target.protocol==='https:'&&
+                (target.hostname.endsWith('.cloudflareaccess.com')||
+                  (target.origin===origin&&target.pathname.startsWith('/cdn-cgi/access/')));
+            }catch{return false;}
+          };
+          function safeOrigin(url,project){
+            if(typeof url!=='string')throw Error('Missing API-verified immutable origin URL');
+            const u=new URL(url),root=project+'.pages.dev';
+            if(u.protocol!=='https:'||u.port||u.username||u.password||u.search||u.hash||
+              u.pathname!=='/'||!u.hostname.endsWith('.'+root)||
+              !/^[a-z0-9][a-z0-9-]{0,62}$/.test(u.hostname.slice(0,-root.length-1)))
+              throw Error('Invalid or non-immutable Cloudflare Pages origin');
+            return u.origin;
+          }
+          async function api(project,env,page){
+            const uri='https://api.cloudflare.com/client/v4/accounts/'+account+
+              '/pages/projects/'+project+'/deployments?env='+env+'&per_page=25&page='+page;
+            const r=await safeGet(uri,{headers:{Authorization:'Bearer '+token,Accept:'application/json'}});
+            if(r.status!==200)throw Error('Deployment GET returned '+r.status);
+            const j=await r.json();
+            if(j.success!==true||!Array.isArray(j.result)||!j.result_info||
+              j.result_info.page!==page||j.result_info.per_page!==25||
+              !Number.isSafeInteger(j.result_info.total_pages)||j.result_info.total_pages<1)
+              throw Error('Inconsistent Pages metadata');
+            return j;
+          }
+          const categories={},checked=new Set();
+          let sampled=0,protectedRouteRequests=0;
+          for(const project of projects){
+            categories[project]={};
+            for(const env of ['production','preview']){
+              const first=await api(project,env,1),pages=first.result_info.total_pages;
+              const chosenPages=[...new Set([1,Math.ceil(pages/2),pages])];
+              const samples=[];
+              for(const page of chosenPages){
+                const response=page===1?first:await api(project,env,page);
+                if(response.result_info.total_pages!==pages)
+                  throw Error('Deployment inventory shifted during selected-page read');
+                const rows=response.result;
+                for(const idx of [...new Set([0,Math.floor((rows.length-1)/2),rows.length-1])]){
+                  if(rows[idx])samples.push(rows[idx]);
+                }
+              }
+              const unique=[...new Set(samples.map(x=>safeOrigin(x.url,project)))];
+              if(unique.length===0)throw Error('No selected deployment origins for '+project+'/'+env);
+              let routeCount=0,originCount=0;
+              for(const origin of unique){
+                if(checked.has(origin))continue;
+                checked.add(origin);originCount++;
+                for(const path of paths){
+                  const r=await safeGet(origin+path,{headers:{'Cache-Control':'no-cache'}});
+                  const restricted=[401,403].includes(r.status)||
+                    ([301,302,303,307,308].includes(r.status)&&
+                      expectedLogin(r.headers.get('location'),origin));
+                  await r.body?.cancel();
+                  if(!restricted)throw Error('Unexpected anonymous immutable route status: '+project+'/'+env+
+                    ' route_kind='+paths.indexOf(path)+' status='+r.status);
+                  routeCount++;protectedRouteRequests++;
+                }
+                sampled++;
+              }
+              categories[project][env]={sampled_immutable_origins:originCount,
+                blocked_or_login_required_route_checks:routeCount,
+                verified_page_sections:chosenPages.length};
+            }
+          }
+          assert.ok(sampled>=10,'Insufficient spread across deployment history');
+          for(const project of projects){
+            const base='https://'+project+'.pages.dev';
+            const r=await safeGet(base+'/',{headers:{'Cache-Control':'no-cache'}});
+            const status=r.status;await r.body?.cancel();
+            assert.equal(status,200,'Public production root changed');
+            categories[project].public_production_root='HTTP_200';
+          }
+          console.log(JSON.stringify({audit:'SEC01 anonymous GET-only historic/recent coverage',
+            sample_only:true,scope:'4 Pages environments, first/middle/last listing pages',
+            project_envs:categories,immutable_origins_sampled:sampled,
+            private_route_checks_protected:protectedRouteRequests,paths_per_origin:paths.length,
+            all_selected_immutable_routes_require_access:true,
+            production_roots_public:true,no_raw_responses_logged:true,
+            no_origin_urls_or_deployment_ids_logged:true,no_cloudflare_mutations:true,
+            does_not_certify_every_alias_or_historical_url:true}));
+          NODE
