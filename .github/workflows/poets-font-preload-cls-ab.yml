@@ -1,0 +1,67 @@
+name: Read-only poets font-preload CLS A/B
+on:
+  push:
+    branches: [ci/poets-font-preload-cls-ab-20261113]
+permissions:
+  contents: read
+jobs:
+  font-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright
+      - name: Compare cold font preloads with original HTML in isolated browser
+        run: |
+          node --input-type=module <<'NODE'
+          import {chromium} from 'playwright';
+          let browser;
+          try { browser=await chromium.launch({channel:'chrome',headless:true,args:['--no-sandbox']});}
+          catch {browser=await chromium.launch({headless:true,args:['--no-sandbox']});}
+          const endpoint='https://aljamharah.pages.dev/poets.html';
+          const fonts={
+            amiri:'https://fonts.gstatic.com/s/amiri/v30/J7aRnpd8CGxBHpUrtLMA7w.woff2',
+            kufi:'https://fonts.gstatic.com/s/notokufiarabic/v27/CSRk4ydQnPyaDxEXLFF6LZVLKrodrOYFFlKp.woff2'
+          };
+          const formats=['baseline','amiri','kufi','both'];
+          try {
+            for(const variant of formats)for(let run=0;run<2;run++){
+              const context=await browser.newContext({viewport:{width:390,height:844},locale:'ar',reducedMotion:'reduce'});
+              let htmlInjected=false;
+              await context.route('**/*',async route=>{
+                if(route.request().method()!=='GET')return route.abort();
+                if(route.request().resourceType()!=='document'||!route.request().url().endsWith('/poets.html')||variant==='baseline')return route.continue();
+                const response=await route.fetch();
+                const original=await response.text();
+                const chosen=variant==='both'?['amiri','kufi']:[variant];
+                const additions=chosen.map(key=>'<link rel="preload" as="font" type="font/woff2" href="'+fonts[key]+'" crossorigin="anonymous">').join('\n');
+                const result=original.replace(/(<link rel="preconnect" href="https:\/\/fonts\.googleapis\.com">)/,additions+'\n$1');
+                if(result===original)throw Error('Missing injected preload anchor');
+                htmlInjected=true;
+                return route.fulfill({response,body:result});
+              });
+              const page=await context.newPage();
+              const returnedFonts=[];
+              page.on('response',res=>{if(res.url().includes('fonts.gstatic.com'))returnedFonts.push({name:res.url().split('/').at(-1),status:res.status()})});
+              await page.addInitScript(()=>{
+                window.__cls=[];
+                new PerformanceObserver(list=>{for(const e of list.getEntries())if(!e.hadRecentInput)window.__cls.push({v:e.value,t:e.startTime})}).observe({type:'layout-shift',buffered:true});
+              });
+              const response=await page.goto(endpoint,{waitUntil:'load',timeout:50000});
+              await page.waitForTimeout(900);
+              const measures=await page.evaluate(()=>({cls:+window.__cls.reduce((a,b)=>a+b.v,0).toFixed(4),
+                 introHeight:Math.round(document.querySelector('.intro')?.getBoundingClientRect().height||0),
+                 cardCount:document.querySelectorAll('#cards .card').length,
+                 fontStatus:document.fonts.status,
+                 scrollWidth:document.documentElement.scrollWidth
+               }));
+              console.log('PRELOAD_AB '+JSON.stringify({variant,run,http:response.status(),injected:htmlInjected,...measures,fonts:returnedFonts}));
+              await context.close();
+            }
+          } finally {await browser.close()}
+          NODE
