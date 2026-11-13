@@ -1,0 +1,120 @@
+name: SEC01 PR104 virtual merge with DO isolation and exact static parity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sec01-pr104-virtual-merge-do-isolation.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-pr104-virtual-merge-do-isolation
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout pinned current Production main (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: f931fbe536229517232d6eb1f3bc4cb498c9f4d5
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Checkout pinned PR104 candidate with full history (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 25367bf11efb0d325d362dbca4a71a5bc02e75c7
+          fetch-depth: 0
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+      - name: Require source SHAs and virtual local merge without push
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C before rev-parse HEAD)" = "f931fbe536229517232d6eb1f3bc4cb498c9f4d5"
+          test "$(git -C after rev-parse HEAD)" = "25367bf11efb0d325d362dbca4a71a5bc02e75c7"
+          git -C after cat-file -e f931fbe536229517232d6eb1f3bc4cb498c9f4d5^{commit}
+          git -C after -c user.name='Isolated CI Merge Proof' \
+            -c user.email='ci@invalid.example' merge --no-ff --no-edit f931fbe536229517232d6eb1f3bc4cb498c9f4d5
+          git -C after diff --name-status f931fbe536229517232d6eb1f3bc4cb498c9f4d5 HEAD > /tmp/pr104-merged-changes.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const actual=readFileSync('/tmp/pr104-merged-changes.txt','utf8').trim().split('\n').sort();
+          const expected=[
+            'M\tscripts/build_public_site.mjs',
+            'A\tscripts/security/public-content-export-policy.mjs',
+            'M\tscripts/test_public_site_build.mjs',
+            'A\ttests/public-content-export-policy.test.mjs'
+          ].sort();
+          assert.deepEqual(actual,expected,'Unexpected files in combined future production tree');
+          console.log('Exactly four PR104 paths changed after ephemeral merge, including all Production DO fixes unchanged.');
+          NODE
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install free local validation dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Build independently sanitized baseline and combined candidate dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd before && node scripts/build_public_site.mjs)
+          (cd after && node scripts/build_public_site.mjs)
+      - name: Confirm all original and added Node tests pass on isolated copies
+        shell: bash
+        run: |
+          set +e
+          (cd before && node --test > ../before-pr104.tap 2>&1)
+          x=$?
+          (cd after && node --test > ../after-pr104.tap 2>&1)
+          y=$?
+          set -e
+          X="$x" Y="$y" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const parse=name=>{
+            const s=readFileSync(name,'utf8');
+            const get=k=>Number(s.match(new RegExp('^# '+k+' (\\d+)$','m'))?.[1]??-1);
+            return {tests:get('tests'),pass:get('pass'),fail:get('fail')};
+          };
+          const before=parse('before-pr104.tap'),after=parse('after-pr104.tap');
+          console.log(JSON.stringify({baseline:before,combined:after,
+            baseline_exit:process.env.X,candidate_exit:process.env.Y}));
+          assert.equal(process.env.X,'0');assert.equal(process.env.Y,'0');
+          assert.equal(before.tests,193,'Baseline DO count isolation tests unexpectedly absent');
+          assert.equal(after.tests,201,'Combined DO + JSON policy tests unexpectedly lost');
+          assert.equal(before.tests,before.pass);assert.equal(after.tests,after.pass);
+          assert.equal(before.fail+after.fail,0);
+          NODE
+      - name: Full combined foundation regression with sanitized-build validation
+        working-directory: after
+        run: |
+          node scripts/check_site_foundation.mjs
+          node --test tests/public-content-export-policy.test.mjs
+          node --test tests/rate-limit.test.js
+      - name: Require all 874 published bytes exactly unchanged
+        working-directory: after
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../before/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json
+      - name: Confirm no tracked project source changed in either tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C before diff --exit-code
+          git -C after diff --exit-code
+          echo 'PASS: PR104 security allowlist plus Production DO key-isolation coexist, 874/874 static public output unchanged.'
