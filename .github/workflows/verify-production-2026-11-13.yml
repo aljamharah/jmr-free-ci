@@ -1,0 +1,93 @@
+name: Verify Jamharah Production (read-only)
+on:
+  push:
+    branches: [ci/production-verification-2026-11-13]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: jamharah-production-smoke-2026-11-13
+  cancel-in-progress: true
+jobs:
+  live-read-only:
+    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/ci/production-verification-2026-11-13'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify public production URLs, rights gates, and JMR API method (GET only)
+        env:
+          SITE: https://aljamharah.pages.dev
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          const origin=process.env.SITE;
+          assert.equal(new URL(origin).hostname,"aljamharah.pages.dev");
+          let checks=0;
+          const seen=[];
+          async function get(path,expected=200){
+            const response=await fetch(origin+path,{
+              method:"GET",
+              headers:{"Cache-Control":"no-cache","Accept":"*/*"},
+              signal:AbortSignal.timeout(20000),
+              redirect:"follow"
+            });
+            assert.equal(response.status,expected,path+" HTTP "+response.status+" != "+expected);
+            checks++;
+            seen.push(path+" "+response.status);
+            return response;
+          }
+          for(const path of ["/","/index.html","/catalog.html","/lexicon.html","/library.html",
+            "/book.html","/reader.html","/poets.html","/poet.html","/poem.html",
+            "/jmr.html","/search.html"]){
+             const response=await get(path);
+             const html=await response.text();
+             assert.match(html,/<html/i,path+" is not HTML");
+             assert.ok(html.includes("AFF71118-81CC-48DF-A661-4410C687EC8F.png"),path+" approved official logo missing");
+             checks+=2;
+          }
+          const sitemap=await(await get("/sitemap.xml")).text();
+          assert.ok(sitemap.includes("/lexicon.html")&&sitemap.includes("/search.html"));
+          assert.ok(!sitemap.includes("/reader.html")&&!sitemap.includes("/book.html"));
+          checks+=2;
+          const robots=await(await get("/robots.txt")).text();
+          for(const restricted of ["/admin/","/api/","/content/books/books/"])
+             assert.ok(robots.includes("Disallow: "+restricted),"Missing robots instruction "+restricted);
+          checks+=3;
+          const css=await(await get("/assets/jmr-fidelity.css")).text();
+          assert.ok(css.includes("jmr-reference-top::before{inset-inline:-12px}"),"Final JMR mobile glow correction missing in Production");
+          checks++;
+          const jmr=await(await get("/jmr.html")).text();
+          assert.ok(jmr.includes("assets/jmr-fidelity.css"),"JMR visual identity stylesheet missing");
+          assert.ok(!jmr.includes("html{min-height:100%;scroll-behavior:smooth;overflow-x:clip}"),"Global document clip unexpectedly used");
+          checks+=2;
+          const poems=await(await get("/content/poems.json")).json();
+          assert.ok(Array.isArray(poems.poems));
+          assert.ok(poems.poems.every(p=>p.publication_status==="published"));
+          assert.ok(poems.poems.every(p=>!Object.hasOwn(p,"editorial_token")&&!Object.hasOwn(p,"rights_basis")));
+          checks+=3;
+          const index=await(await get("/content/books/index.json")).json();
+          assert.equal(index.books?.length,9,"Book index must contain nine bibliographic records");
+          assert.ok(index.books.every(b=>b.rights_label==="حقوق القراءة قيد المراجعة"));
+          checks+=2;
+          for(const b of index.books){
+            assert.match(b.record,/^content\/books\/records\/[A-Za-z0-9_-]+\.json$/);
+            const record=await(await get("/"+b.record)).json();
+            assert.equal(record.id,b.id);
+            assert.equal(record.rights_status,"pending_review");
+            assert.equal(record.rights_basis_verified,false);
+            assert.equal(record.reading_allowed,false);
+            assert.equal(record.download_allowed,false);
+            assert.equal(record.external_embed_allowed,false);
+            assert.equal(record.external_embed_url,"");
+            assert.equal(record.text_content,"");
+            assert.equal(record.pdf_url,"");
+            assert.match(record.external_source_url,/^https:\/\//);
+            checks+=11;
+          }
+          const api=await get("/api/jmr",405);
+          assert.equal(api.headers.get("x-jmr-revision"),"jmr-retrieval-2026-11-12-dedup-r1","JMR backend revision not the reviewed release");
+          assert.equal(api.headers.get("x-jmr-social-release"),"natural-replies-r3");
+          checks+=2;
+          console.log("PRODUCTION HTTP "+seen.join(", "));
+          console.log("PRODUCTION CHECKS "+checks+" PASS; books=9; poem_records="+poems.poems.length+"; paid_ai_calls=0; mutation_calls=0");
+          NODE
