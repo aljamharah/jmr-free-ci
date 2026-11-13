@@ -109,6 +109,35 @@ jobs:
           }
           NODE
 
+      - name: Read-only Cloudflare preview HTML and privacy source GET checks
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          for(const base of [
+            "https://e4785920.aljamharah.pages.dev",
+            "https://c66d88fc.aljamharah-staging.pages.dev"
+          ]){
+            async function read(path){
+              const response=await fetch(base+path,{signal:AbortSignal.timeout(20000)});
+              return {status:response.status,body:await response.text()};
+            }
+            const p=await read("/privacy.html");
+            assert.equal(p.status,200,"Published privacy page unavailable");
+            assert.ok(p.body.includes('id="privacyPolicy"'));
+            assert.ok(p.body.includes('name="robots" content="noindex,follow"'));
+            const json=await read("/content/settings/site.json");
+            assert.equal(json.status,200,"Published privacy source missing");
+            const text=JSON.parse(json.body).privacy_policy;
+            assert.ok(typeof text==="string"&&text.includes("AlAdhan")&&text.includes("GPS"));
+            for(const page of ["/index.html","/library.html","/jmr.html"]){
+              const result=await read(page);
+              assert.equal(result.status,200,"Page unavailable "+page);
+              assert.ok(result.body.includes('href="privacy.html"'),"Footer link missing "+page);
+            }
+            console.log("J07_PREVIEW_GET=PASS environment="+new URL(base).hostname);
+          }
+          NODE
+
       - name: Verify canonical private source checkout stayed unchanged
         working-directory: source
         run: git diff --exit-code -- .
