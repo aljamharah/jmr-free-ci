@@ -179,17 +179,17 @@ jobs:
         working-directory: private-source/workers/jmr-ratelimit-do
         run: npm test
 
-      - name: Verify exact e6b2ff4 Cloudflare Preview (GET only, no AI usage)
+      - name: Verify exact a63a811 Cloudflare Preview (GET only, no AI usage)
         env:
-          JMR_PREVIEW_ORIGIN: https://d3118d95.aljamharah.pages.dev
+          JMR_PREVIEW_ORIGIN: https://569ff7f6.aljamharah.pages.dev
         run: |
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
           const origin = process.env.JMR_PREVIEW_ORIGIN;
-          if (new URL(origin).hostname !== "d3118d95.aljamharah.pages.dev") throw new Error("Unexpected Preview origin");
+          if (new URL(origin).hostname !== "569ff7f6.aljamharah.pages.dev") throw new Error("Unexpected Preview origin");
           const routes = [
             ["/",200],["/sitemap.xml",200],["/robots.txt",200],
-            ["/search.html",200],["/jmr.html",200],["/content/poems.json",200],
+            ["/search.html",200],["/jmr.html",200],["/assets/jmr-fidelity.css",200],["/content/poems.json",200],
             ["/content/books/index.json",200],["/content/books/records/akhfash-qawafi.json",200],["/api/jmr",405]
           ];
           const results = [];
@@ -204,6 +204,15 @@ jobs:
               assert.ok(payload.poems.every(x=>!Object.hasOwn(x,"editorial_token")&&!Object.hasOwn(x,"rights_basis")));
             }
             if (route==="/sitemap.xml") assert.ok((await response.text()).includes("/search.html"));
+            if (route==="/jmr.html") {
+              const html=await response.text();
+              assert.ok(!html.includes("html{min-height:100%;scroll-behavior:smooth;overflow-x:clip}"));
+              assert.ok(html.includes('assets/jmr-fidelity.css'));
+            }
+            if (route==="/assets/jmr-fidelity.css") {
+              const css=await response.text();
+              assert.ok(css.includes("jmr-reference-top::before{inset-inline:-12px}"));
+            }
             if (route==="/content/books/records/akhfash-qawafi.json") {
               const book=await response.json();
               assert.equal(book.rights_status,"pending_review");
