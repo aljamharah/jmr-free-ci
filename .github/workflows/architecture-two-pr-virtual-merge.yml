@@ -1,0 +1,153 @@
+name: Architecture PR105 and PR107 isolated virtual-merge parity
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/architecture-two-pr-virtual-merge.yml"
+permissions:
+  contents: read
+concurrency:
+  group: architecture-two-pr-virtual-merge
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require existing read-only private source credential
+        env:
+          SOURCE_READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          if [ -z "$SOURCE_READ_TOKEN" ]; then echo "::error::Missing read-only private source credential"; exit 1; fi
+      - name: Checkout pinned current main as independent sanitized baseline
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: aad574cfa0e399f6aeffdd4c8b8cea2648652269
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: baseline
+          persist-credentials: false
+      - name: Checkout pinned PR105 as disposable virtual-merge candidate
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 8f5cf57385b142be5e17d48cf1c9aeac69688440
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout pinned PR107 for local-only merge
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 987cab06a0ab6d43a31f553f46f08210f346a09f
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: pr107
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate exact SHA and locally merge the independent PRs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "aad574cfa0e399f6aeffdd4c8b8cea2648652269"
+          test "$(git -C candidate rev-parse HEAD)" = "8f5cf57385b142be5e17d48cf1c9aeac69688440"
+          test "$(git -C pr107 rev-parse HEAD)" = "987cab06a0ab6d43a31f553f46f08210f346a09f"
+          git -C candidate fetch --no-tags ../pr107 987cab06a0ab6d43a31f553f46f08210f346a09f
+          git -C candidate -c user.name='Disposable parity CI' -c user.email='ci@invalid.example' merge --no-ff --no-edit 987cab06a0ab6d43a31f553f46f08210f346a09f
+          git -C candidate diff --name-status --no-renames aad574cfa0e399f6aeffdd4c8b8cea2648652269 HEAD > /tmp/two-pr-files.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          const expected=[
+            'A\ttests/security/cloudflare-pages-audit.test.mjs',
+            'D\ttests/cloudflare-pages-audit.test.mjs',
+            'A\ttests/security/sec01-readonly-deployments.test.mjs',
+            'D\ttests/sec01-readonly-deployments.test.mjs',
+            'M\tdocs/security/SEC01-READONLY-DEPLOYMENT-AUDIT-2026-11-13-AR.md'
+          ].sort();
+          const actual=readFileSync('/tmp/two-pr-files.txt','utf8').trim().split('\n').filter(Boolean).sort();
+          assert.deepEqual(actual,expected,'Combined virtual merge touched unrelated source');
+          const checks=[
+            ['tests/cloudflare-pages-audit.test.mjs','tests/security/cloudflare-pages-audit.test.mjs',
+             '../scripts/audit_cloudflare_pages.mjs','../../scripts/audit_cloudflare_pages.mjs'],
+            ['tests/sec01-readonly-deployments.test.mjs','tests/security/sec01-readonly-deployments.test.mjs',
+             '../scripts/security/audit-pages-deployments.mjs','../../scripts/security/audit-pages-deployments.mjs']
+          ];
+          for (const [from,to,oldImport,newImport] of checks) {
+            const orig=execFileSync('git',['-C','baseline','show','aad574cfa0e399f6aeffdd4c8b8cea2648652269:'+from],{encoding:'utf8'});
+            const moved=readFileSync('candidate/'+to,'utf8');
+            assert.equal(orig.split(oldImport).length-1,1,'Unexpected original relative import count');
+            assert.equal(moved,orig.replace(oldImport,newImport),'Test logic changed beyond import path');
+          }
+          const doc='docs/security/SEC01-READONLY-DEPLOYMENT-AUDIT-2026-11-13-AR.md';
+          const oldDoc=execFileSync('git',['-C','baseline','show','aad574cfa0e399f6aeffdd4c8b8cea2648652269:'+doc],{encoding:'utf8'});
+          const newDoc=readFileSync('candidate/'+doc,'utf8');
+          assert.equal(newDoc,oldDoc.replace('tests/sec01-readonly-deployments.test.mjs',
+            'tests/security/sec01-readonly-deployments.test.mjs'),'Documentation beyond test path changed');
+          console.log('Both test-only PRs compose without overlap. No application files changed.');
+          NODE
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only offline source validator dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Run both moved test suites in the disposable virtual merge
+        working-directory: candidate
+        run: |
+          node --test tests/security/cloudflare-pages-audit.test.mjs tests/security/sec01-readonly-deployments.test.mjs
+      - name: Build two independent sanitized inventories before full test discovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+      - name: Require identical full Node test discovery and passing tests on both checkouts
+        shell: bash
+        run: |
+          set +e
+          (cd baseline && node --test > ../before-node.tap 2>&1)
+          before=$?
+          (cd candidate && node --test > ../after-node.tap 2>&1)
+          after=$?
+          set -e
+          BEFORE="$before" AFTER="$after" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          function metrics(path){
+            const text=readFileSync(path,'utf8');
+            const match=key=>{const m=text.match(new RegExp('^# '+key+' ([0-9]+)$','m')); assert.ok(m,'missing '+key+' in '+path);return Number(m[1]);};
+            return {tests:match('tests'),pass:match('pass'),fail:match('fail'),cancelled:match('cancelled')};
+          }
+          const before=metrics('before-node.tap'),after=metrics('after-node.tap');
+          console.log(JSON.stringify({before,after,baselineExit:process.env.BEFORE,candidateExit:process.env.AFTER}));
+          assert.equal(process.env.BEFORE,'0');
+          assert.equal(process.env.AFTER,'0');
+          assert.deepEqual(after,before,'PR composition altered test discovery or outcome');
+          assert.equal(after.tests,after.pass);
+          NODE
+      - name: Run established foundation checks without contacting a model
+        working-directory: candidate
+        run: node scripts/check_site_foundation.mjs
+      - name: Run read-only Python source checks
+        working-directory: candidate
+        run: |
+          python scripts/validate_library.py
+          python -m unittest discover -s tests -p 'test_*.py'
+      - name: Require complete published static output byte and path parity
+        working-directory: candidate
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../baseline/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json
+      - name: Require all tracked original source files unchanged by checks
+        shell: bash
+        run: |
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          git -C pr107 diff --exit-code
+          echo 'All original source clean. This was an ephemeral merge with no private push, Cloudflare write or model request.'
