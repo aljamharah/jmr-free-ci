@@ -1,0 +1,122 @@
+name: Architecture and SEC01 final post-merge private source parity
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/architecture-post-merge-security-parity.yml"
+permissions:
+  contents: read
+concurrency:
+  group: architecture-post-merge-security-parity
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require pre-existing private Contents Read credential
+        env:
+          READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          test -n "$READ_TOKEN" || { echo "::error::Missing read-only private source credential"; exit 1; }
+      - name: Checkout published security baseline in disposable folder
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 51859f4bf08c3fd05a973525807f2ef5cbc05760
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: before
+          persist-credentials: false
+      - name: Checkout latest post-merge candidate in separate disposable folder
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 6ba516709ce090068ceac32a4faac5868a44e434
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: after
+          persist-credentials: false
+      - name: Verify pinned revisions and only known source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C before rev-parse HEAD)" = "51859f4bf08c3fd05a973525807f2ef5cbc05760"
+          test "$(git -C after rev-parse HEAD)" = "6ba516709ce090068ceac32a4faac5868a44e434"
+          git -C after fetch --no-tags --depth=15 origin 51859f4bf08c3fd05a973525807f2ef5cbc05760
+          git -C after diff --name-status --no-renames 51859f4bf08c3fd05a973525807f2ef5cbc05760 HEAD > /tmp/release-diff.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const actual=readFileSync('/tmp/release-diff.txt','utf8').trim().split('\n').filter(Boolean).sort();
+          const expected=[
+            'M\tdocs/security/SEC01-READONLY-DEPLOYMENT-AUDIT-2026-11-13-AR.md',
+            'M\tscripts/build_public_site.mjs',
+            'M\tscripts/security/public-content-export-policy.mjs',
+            'M\ttests/public-content-export-policy.test.mjs',
+            'D\ttests/sec01-readonly-deployments.test.mjs',
+            'A\ttests/security/sec01-readonly-deployments.test.mjs'
+          ].sort();
+          assert.deepEqual(actual,expected,'Unexpected extra changes beyond #107 and #109');
+          console.log('Verified exact reviewed source delta; no unexpected files.');
+          NODE
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only public source-checking dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Build independent sanitized static inventories
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd before && node scripts/build_public_site.mjs)
+          (cd after && node scripts/build_public_site.mjs)
+      - name: Run all Node tests on both independent complete checkouts
+        shell: bash
+        run: |
+          set +e
+          (cd before && node --test > ../before-node.tap 2>&1)
+          before_status=$?
+          (cd after && node --test > ../after-node.tap 2>&1)
+          after_status=$?
+          set -e
+          BEFORE_STATUS="$before_status" AFTER_STATUS="$after_status" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          function result(file){
+            const input=readFileSync(file,'utf8');
+            const get=key=>{const m=input.match(new RegExp('^# '+key+' ([0-9]+)$','m'));assert.ok(m,'Missing '+key+' in '+file);return Number(m[1]);};
+            return {tests:get('tests'),pass:get('pass'),fail:get('fail'),cancelled:get('cancelled')};
+          }
+          const a=result('before-node.tap'),b=result('after-node.tap');
+          console.log(JSON.stringify({baseline:a,current:b,baselineExit:process.env.BEFORE_STATUS,currentExit:process.env.AFTER_STATUS}));
+          assert.equal(process.env.BEFORE_STATUS,'0');
+          assert.equal(process.env.AFTER_STATUS,'0');
+          assert.equal(a.fail,0);
+          assert.equal(b.fail,0);
+          assert.equal(a.pass,a.tests);
+          assert.equal(b.pass,b.tests);
+          assert.ok(b.tests>=a.tests,'Security additions must not reduce test coverage');
+          NODE
+      - name: Run complete current-source technical regression (ten gates)
+        working-directory: after
+        run: node scripts/check_site_foundation.mjs
+      - name: Run Python read-only source, rights and content regression
+        working-directory: after
+        run: |
+          python scripts/validate_library.py
+          python -m unittest discover -s tests -p 'test_*.py'
+      - name: Require exact public dist paths sizes and SHA-256
+        working-directory: after
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../before/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json
+      - name: Require clean tracked source; no credentials or private artifacts uploaded
+        shell: bash
+        run: |
+          git -C before diff --exit-code
+          git -C after diff --exit-code
+          echo 'No private push, Cloudflare mutation, external model request, or artifact upload.'
