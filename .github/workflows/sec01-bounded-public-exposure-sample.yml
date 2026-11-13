@@ -82,15 +82,15 @@ jobs:
             try{
               r=await fetch(origin+path,{method:'GET',redirect:'manual',headers:{Accept:'application/json'},
                 signal:AbortSignal.timeout(12000)});
-            }catch{return 'unverified'}
+            }catch{return 'unverified_network'}
             if(r.status===403||r.status===404)return 'blocked';
-            if(r.status!==200)return 'unverified';
+            if(r.status!==200)return 'unverified_http_'+r.status;
             let raw;
-            try{raw=await readBounded(r)}catch{return 'unverified'}
-            if(raw===null)return 'unverified';
+            try{raw=await readBounded(r)}catch{return 'unverified_body_read'}
+            if(raw===null)return 'unverified_size_or_empty';
             let data;
-            try{data=JSON.parse(raw)}catch{return 'unverified'}
-            if(!data||!Array.isArray(data.poems)||data.poems.length===0)return 'unverified';
+            try{data=JSON.parse(raw)}catch{return 'unverified_non_json';
+            if(!data||!Array.isArray(data.poems)||data.poems.length===0)return 'unverified_schema';
             for(const row of data.poems) {
               if(!row||typeof row!=='object'||row.publication_status!=='published')return 'suspected_exposure';
               if(Object.keys(row).some(k=>!allowed.has(k)))return 'suspected_exposure';
@@ -104,7 +104,7 @@ jobs:
           for(const project of PROJECTS)for(const env of ENVIRONMENTS){
             const key=project+'/'+env;
             const stats={checked_origins:0,checked_routes:0,blocked:0,allowlisted_public:0,
-              suspected_exposure:0,unverified:0,unverified_origin:0,total_pages:0};
+              suspected_exposure:0,unverified:0,unverified_reasons:{},unverified_origin:0,total_pages:0};
             metrics[key]=stats;
             const pre=project+'/deployments?env='+env+'&per_page=25&page=';
             const first=await safeGet(pre+'1');
@@ -126,7 +126,11 @@ jobs:
               stats.checked_origins++;origins++;
               for(const route of PATHS){
                 const outcome=await probe(origin,route);
-                stats[outcome]++;stats.checked_routes++;routes++;
+                if(outcome.startsWith('unverified_')){
+                  stats.unverified++;
+                  stats.unverified_reasons[outcome]=(stats.unverified_reasons[outcome]||0)+1;
+                }else stats[outcome]++;
+                stats.checked_routes++;routes++;
               }
             }
           }
