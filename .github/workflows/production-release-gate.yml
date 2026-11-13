@@ -83,7 +83,7 @@ jobs:
           }
           const markers={
             "/index.html":["lexicon.html?q="],
-            "/catalog.html":["lexicon.html#wordSearch"],
+            "/catalog.html":['href="lexicon.html"','window.location.assign("search.html")'],
             "/lexicon.html":['new URLSearchParams(window.location.search).get("q")'],
             "/library.html":["booksLoadFailure"],
             "/book.html":['rel="stylesheet"><style>'],
@@ -129,7 +129,7 @@ jobs:
                 policy.includes("jamharah-prayer-location-v1");
             } catch(_error) {}
           }
-          console.log("PUBLIC_PRIVACY_DISCLOSURE_DRAFT="+privacyDraftSafe);
+          console.log("PUBLIC_PRIVACY_DISCLOSURE_DRAFT="+privacyDraftSafe+" status="+settingsResponse.status);
           if(!privacyDraftSafe)process.exitCode=1;
           const api=await get("/api/jmr");
           console.log("PUBLIC_API_GET 405="+(api.status===405));
