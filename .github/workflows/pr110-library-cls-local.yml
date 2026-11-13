@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: a7e9db725e446911e4595364cdb863ece6d7d754
+          ref: 9b68deb2c8cc5e243ec71ba6b61f202b19972984
           path: candidate
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
@@ -34,7 +34,7 @@ jobs:
       - name: Confirm pinned baseline and candidate
         run: |
           test "$(git -C baseline rev-parse HEAD)" = "51859f4bf08c3fd05a973525807f2ef5cbc05760"
-          test "$(git -C candidate rev-parse HEAD)" = "a7e9db725e446911e4595364cdb863ece6d7d754"
+          test "$(git -C candidate rev-parse HEAD)" = "9b68deb2c8cc5e243ec71ba6b61f202b19972984"
       - name: Build sanitized public dist in two isolated checkouts
         run: |
           (cd baseline && node scripts/build_public_site.mjs)
@@ -118,12 +118,43 @@ jobs:
             const avg=a=>a.reduce((s,v)=>s+v.cls,0)/a.length;
             const before=avg(results.baseline),after=avg(results.candidate);
             console.log("CLS_COMPARE "+JSON.stringify({before:Number(before.toFixed(4)),after:Number(after.toFixed(4)),runs:results}));
-            assert.ok(results.candidate.every(x=>x.renderedCards===6&&x.overflow===0&&x.reserve>=470&&parseFloat(x.naturalMin)===0),
+            assert.ok(results.candidate.every(x=>x.renderedCards===6&&x.overflow===0&&Math.abs(x.reserve-x.loadedHeight)<=2&&parseFloat(x.naturalMin)===0),
               "Transient reservation changed loaded cards/overflow or did not disappear after render");
             assert.ok(Math.abs(results.candidate[0].loadedHeight-results.baseline[0].loadedHeight)<=2,
               "Approved loaded grid geometry changed");
             assert.ok(before>=0.06,"Baseline too low for meaningful CLS comparison; manual evaluation required");
             assert.ok(after<=before*0.6,"No meaningful CLS improvement in controlled test");
+            // Additional exact-layout invariant across desktop, tablet and small phones.
+            const widths=[320,360,600,768,1280];
+            for(const width of widths){
+              const measured={};
+              for(const source of ["baseline","candidate"]){
+                const context=await browser.newContext({viewport:{width,height:844},
+                  locale:"ar",reducedMotion:"reduce",colorScheme:"dark"});
+                const page=await context.newPage();
+                const response=await page.goto(roots[source].url+"/library.html",{waitUntil:"load",timeout:60000});
+                assert.equal(response.status(),200);
+                await page.locator("#categories .category").first().waitFor({timeout:12000});
+                await page.waitForTimeout(450);
+                measured[source]=await page.evaluate(()=>{
+                  const c=document.querySelector("#categories"),rect=c.getBoundingClientRect();
+                  const loaded=Math.round(rect.height),cards=c.children.length;
+                  const old=[...c.childNodes];c.replaceChildren();
+                  const reserve=parseFloat(getComputedStyle(c).minHeight)||0;
+                  c.replaceChildren(...old);
+                  return {loaded,reserve,cards,overflow:Math.max(0,document.documentElement.scrollWidth-innerWidth)};
+                });
+                await context.close();
+              }
+              console.log("CLS_MULTIWIDTH "+JSON.stringify({width,...measured}));
+              assert.equal(measured.baseline.cards,6);
+              assert.equal(measured.candidate.cards,6);
+              assert.equal(measured.candidate.overflow,0);
+              assert.ok(Math.abs(measured.baseline.loaded-measured.candidate.loaded)<=2,
+                "PR110 changed loaded category geometry at width "+width);
+              assert.ok(Math.abs(measured.candidate.reserve-measured.candidate.loaded)<=4,
+                "Initial CSS reservation differs from fully loaded grid at width "+width);
+            }
             console.log("CLS_IMPROVEMENT_GATE PASS no permanent visual changes; tested exact candidate SHA");
           }finally{await browser.close();await Promise.all(Object.values(roots).map(o=>new Promise(r=>o.server.close(r))))}
           NODE
