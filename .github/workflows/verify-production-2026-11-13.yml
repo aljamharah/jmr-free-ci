@@ -91,3 +91,71 @@ jobs:
           console.log("PRODUCTION HTTP "+seen.join(", "));
           console.log("PRODUCTION CHECKS "+checks+" PASS; books=9; poem_records="+poems.poems.length+"; paid_ai_calls=0; mutation_calls=0");
           NODE
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install read-only browser smoke dependency
+        run: npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright
+      - name: Production Chromium browser smoke (5 viewports, no model calls)
+        env:
+          SITE: https://aljamharah.pages.dev
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import {chromium} from "playwright";
+          const origin=process.env.SITE;
+          let browser;
+          try{browser=await chromium.launch({channel:"chrome",headless:true,args:["--no-sandbox"]})}
+          catch{browser=await chromium.launch({headless:true,args:["--no-sandbox"]})}
+          let assertions=0,requests=0,heavy=0,modelCalls=0;
+          const pages=["/","/lexicon.html","/library.html","/jmr.html","/search.html"];
+          try{
+            for(const width of [320,360,390,414,1280]){
+              const ctx=await browser.newContext({viewport:{width,height:844},locale:"ar",reducedMotion:"reduce"});
+              await ctx.route("**/*",route=>{
+                const req=route.request();requests++;
+                if(req.method()!=="GET"){modelCalls++;return route.abort()}
+                if(/jamharah_lexicon_[0-9]+\.json(?:[?#]|$)/.test(req.url())){heavy++;return route.abort()}
+                return route.continue()
+              });
+              for(const path of pages){
+                const page=await ctx.newPage();
+                const errors=[];
+                page.on("pageerror",error=>errors.push(error.message));
+                const response=await page.goto(origin+path,{waitUntil:"domcontentloaded",timeout:25000});
+                assert.equal(response?.status(),200,path+" status "+width);assertions++;
+                assert.ok((await page.title()).length>0,path+" title "+width);assertions++;
+                await page.evaluate(()=>document.fonts.ready);
+                const excess=await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth);
+                assert.ok(excess<=2,path+" horizontal overflow "+excess+"px at "+width);assertions++;
+                assert.equal(errors.length,0,path+" JavaScript error "+errors.slice(0,2).join(" / "));assertions++;
+                if(path==="/jmr.html"){
+                  assert.equal(await page.locator("button.specialty").count(),10);assertions++;
+                  assert.equal(await page.locator("#sendButton").count(),1);assertions++;
+                }
+                console.log("LIVE_BROWSER "+width+" "+path+" status=200 excess="+excess+" errors="+errors.length);
+                await page.close();
+              }
+              // Pending-rights book source links may open, but no local book reader.
+              const book=await ctx.newPage();
+              await book.goto(origin+"/book.html?id=akhfash-qawafi",{waitUntil:"domcontentloaded",timeout:25000});
+              await book.locator(".book-title").waitFor({timeout:15000});
+              assert.equal(await book.getByRole("link",{name:"القراءة داخل قارئ الجمهرة"}).count(),0);assertions++;
+              assert.equal(await book.getByRole("link",{name:/فتح صفحة المصدر الخارجي/}).count(),1);assertions++;
+              await book.close();
+              const reader=await ctx.newPage();
+              await reader.goto(origin+"/reader.html?id=akhfash-qawafi&format=external",{waitUntil:"domcontentloaded",timeout:25000});
+              await reader.locator("#readerContent .notice").waitFor({timeout:15000});
+              assert.equal(await reader.locator("#readerContent iframe").count(),0);assertions++;
+              await reader.close();
+              await ctx.close();
+            }
+            assert.equal(modelCalls,0,"No mutating network request is permitted");
+            assert.equal(heavy,0,"An ordinary page view must not fetch massive lexicon JSON shards");
+            console.log("PRODUCTION CHROMIUM "+assertions+" assertions passed; viewports=320,360,390,414,1280; pages=5; book_rights=source_only; intercepted_heavy_shards="+heavy+"; model_calls="+modelCalls+"; browser_requests="+requests);
+          }finally{await browser.close()}
+          NODE
