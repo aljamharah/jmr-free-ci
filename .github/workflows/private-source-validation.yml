@@ -76,16 +76,16 @@ jobs:
         working-directory: private-source
         run: node scripts/validate_jmr_quran.mjs
 
-      - name: Run private JMR API and Quran tests
-        working-directory: private-source
-        run: npm test
-
-      - name: Verify public dist, full-file SHA inventory, and navigation links
+      - name: Build safe static site and verify full-file SHA inventory before tests
         working-directory: private-source
         run: |
           node scripts/test_public_site_build.mjs
           node scripts/audit_site_links.mjs
           node scripts/test_header_navigation.mjs
+
+      - name: Run private JMR API and Quran tests
+        working-directory: private-source
+        run: npm test
 
       - name: Build and validate published poet biographies
         working-directory: private-source
