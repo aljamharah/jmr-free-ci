@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 4e320f97792c14243232167e090e6179ff21f934
+          ref: f7df7a71e85e6236b49df94eee96fafdbbae2b0e
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: baseline
@@ -51,23 +51,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C baseline rev-parse HEAD)" = "4e320f97792c14243232167e090e6179ff21f934"
+          test "$(git -C baseline rev-parse HEAD)" = "f7df7a71e85e6236b49df94eee96fafdbbae2b0e"
           test "$(git -C candidate rev-parse HEAD)" = "847cae1968abb9fd1684fcae3cf1f2fe6f9d24ac"
-          git -C candidate cat-file -e 4e320f97792c14243232167e090e6179ff21f934^{commit}
+          git -C candidate cat-file -e f7df7a71e85e6236b49df94eee96fafdbbae2b0e^{commit}
           echo "Pinned commits exist. No GitHub branch will be modified."
 
       - name: Produce ephemeral local merge; never push any commit
         shell: bash
         run: |
           set -euo pipefail
-          git -C candidate -c user.name='Read-only CI Probe' -c user.email='ci@invalid.example' merge --no-ff --no-edit 4e320f97792c14243232167e090e6179ff21f934
+          git -C candidate -c user.name='Read-only CI Probe' -c user.email='ci@invalid.example' merge --no-ff --no-edit f7df7a71e85e6236b49df94eee96fafdbbae2b0e
           echo "Created a merge commit only in this disposable runner checkout. No push is configured."
 
       - name: Ensure virtual merge adds only the ten PR84 docs/tools/tests
         shell: bash
         run: |
           set -euo pipefail
-          git -C candidate diff --name-status 4e320f97792c14243232167e090e6179ff21f934 HEAD > /tmp/architecture-changed-files.txt
+          git -C candidate diff --name-status f7df7a71e85e6236b49df94eee96fafdbbae2b0e HEAD > /tmp/architecture-changed-files.txt
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import {readFileSync} from 'node:fs';
