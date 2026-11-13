@@ -1,0 +1,74 @@
+name: Personal noncommercial project purpose exact SHA and dist parity
+
+on:
+  push:
+    branches: [ci/project-purpose-docs-parity-20261113]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact private baseline read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: d082d32b7288232d83d1ad0d05ecbf0473aeeea2
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+      - name: Checkout exact proposed docs commit read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 81871d8e7dfe84a58aa25cdc45683e39e746308a
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check pinned revisions and narrow document-only change
+        run: |
+          test "$(git -C baseline rev-parse HEAD)" = "d082d32b7288232d83d1ad0d05ecbf0473aeeea2"
+          test "$(git -C candidate rev-parse HEAD)" = "81871d8e7dfe84a58aa25cdc45683e39e746308a"
+          git -C baseline diff --name-only d082d32b7288232d83d1ad0d05ecbf0473aeeea2 81871d8e7dfe84a58aa25cdc45683e39e746308a >/dev/null 2>&1 || true
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          const base='d082d32b7288232d83d1ad0d05ecbf0473aeeea2',head='81871d8e7dfe84a58aa25cdc45683e39e746308a';
+          const expected=['README.md','docs/PROJECT-COMMAND-CENTER-AR.md',
+            'docs/PROJECT-PERSONAL-PURPOSE-AR.md'].sort();
+          // This is a pinned two-commit diff in the candidate repository.
+          const paths=execFileSync('git',['-C','candidate','diff','--name-only',base,head],
+            {encoding:'utf8'}).trim().split('\n').filter(Boolean).sort();
+          assert.deepEqual(paths,expected);
+          const body=readFileSync('candidate/docs/PROJECT-PERSONAL-PURPOSE-AR.md','utf8');
+          assert.match(body,/هاوٍ ومدوّن/);
+          assert.match(body,/غير تجاري/);
+          assert.match(body,/مؤجَّل/);
+          assert.match(body,/لا تعني تلقائيًا الإعفاء/);
+          assert.match(readFileSync('candidate/README.md','utf8'),/PROJECT-PERSONAL-PURPOSE-AR/);
+          assert.match(readFileSync('candidate/docs/PROJECT-COMMAND-CENTER-AR.md','utf8'),
+            /PROJECT-PERSONAL-PURPOSE-AR/);
+          console.log('PROJECT_PURPOSE_DOCS_SCOPE=PASS exactly three docs, no website changes');
+          NODE
+      - name: Build baseline static Pages dist
+        working-directory: baseline
+        run: node scripts/build_public_site.mjs
+      - name: Build candidate and run technical foundation and Node tests
+        working-directory: candidate
+        run: |
+          node scripts/check_site_foundation.mjs
+          node --test tests/*.test.mjs
+      - name: Verify strict 874-file asset hashes match baseline
+        run: node candidate/scripts/validation/compare-public-dist.mjs baseline/build-reports/dist-inventory.json candidate/build-reports/dist-inventory.json
+      - name: Verify checkout tracked worktrees remained unchanged
+        run: |
+          test -z "$(git -C baseline status --porcelain --untracked-files=no)"
+          test -z "$(git -C candidate status --porcelain --untracked-files=no)"
