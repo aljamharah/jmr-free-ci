@@ -1,0 +1,99 @@
+name: Read-only architecture candidate source and dist parity audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/architecture-parity-audit.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-parity-audit-2026-11-13
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    # Only trusted changes on the owner's default branch can obtain the pre-existing read-only checkout token.
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Ensure private read-only source credential is configured
+        env:
+          SOURCE_READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          if [ -z "$SOURCE_READ_TOKEN" ]; then
+            echo "::error::Missing fine-grained Contents:Read token for private source."
+            exit 1
+          fi
+
+      - name: Checkout exact documented production-source baseline
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: a826d2e560fff6540fdfbc17d5a40d2aa55875fa
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+
+      - name: Checkout exact reviewed architecture candidate
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 847cae1968abb9fd1684fcae3cf1f2fe6f9d24ac
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+
+      - name: Check exact SHA to prevent unintended revision testing
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "a826d2e560fff6540fdfbc17d5a40d2aa55875fa"
+          test "$(git -C candidate rev-parse HEAD)" = "847cae1968abb9fd1684fcae3cf1f2fe6f9d24ac"
+          echo "Pinned baseline and candidate revisions verified. No private source content printed."
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install open source library-validation tools only
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+
+      - name: Validate architecture contract and fixture-based tools at candidate SHA
+        working-directory: candidate
+        run: |
+          node --test tests/architecture-asset-references.test.mjs tests/architecture-contract.test.mjs tests/compare-public-dist.test.mjs
+
+      - name: Run full established source, CMS privacy, Quran and JMR regression gate
+        working-directory: candidate
+        run: node scripts/check_site_foundation.mjs
+
+      - name: Build independent static baseline inventory
+        working-directory: baseline
+        run: node scripts/build_public_site.mjs
+
+      - name: Rebuild independent candidate inventory
+        working-directory: candidate
+        run: node scripts/build_public_site.mjs
+
+      - name: Reject ANY byte/path change in static dist
+        working-directory: candidate
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../baseline/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json
+
+      - name: Confirm both private source trees remain unmodified
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          echo "All tracked source unchanged. No Cloudflare writes, deployments, model requests, or artifact uploads."
