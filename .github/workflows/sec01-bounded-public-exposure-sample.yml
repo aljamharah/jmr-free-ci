@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Test at most 16 verified API deployment origins and 32 read-only URLs, never log content
+      - name: Diagnose 32 safe-route responses plus at most 16 root comparisons; never log content
         env:
           ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
@@ -86,6 +86,27 @@ jobs:
             if(mime==='application/octet-stream')return 'binary';
             return mime?'other':'missing';
           }
+          // A same-body HTML fallback to '/' is only diagnostic, never clearance.
+          // Cache at most one bounded root response per sampled origin, without logging it.
+          const homeCache=new Map();
+          let rootChecks=0;
+          async function compareRootHtml(origin,raw){
+            if(!homeCache.has(origin)){
+              rootChecks++;
+              let home=null;
+              try {
+                const r=await fetch(origin+'/',{method:'GET',redirect:'manual',
+                  headers:{Accept:'application/json'},signal:AbortSignal.timeout(12000)});
+                if(r.status===200 && mimeClass(r.headers.get('content-type'))==='html'){
+                  home=await readBounded(r);
+                }
+              }catch{home=null}
+              homeCache.set(origin,home);
+            }
+            const home=homeCache.get(origin);
+            if(home===null)return 'unverified_html_root_unavailable';
+            return raw===home?'unverified_html_matches_home':'unverified_html_differs_from_home';
+          }
           async function probe(origin,path){
             let r;
             try{
@@ -98,7 +119,11 @@ jobs:
             try{raw=await readBounded(r)}catch{return 'unverified_body_read'}
             if(raw===null)return 'unverified_size_or_empty';
             let data;
-            try{data=JSON.parse(raw)}catch{return 'unverified_non_json_'+mimeClass(r.headers.get('content-type'))}
+            try{data=JSON.parse(raw)}catch{
+              if(mimeClass(r.headers.get('content-type'))==='html')
+                return await compareRootHtml(origin,raw);
+              return 'unverified_non_json_'+mimeClass(r.headers.get('content-type'));
+            }
             if(!data||!Array.isArray(data.poems)||data.poems.length===0)return 'unverified_schema';
             for(const row of data.poems) {
               if(!row||typeof row!=='object'||row.publication_status!=='published')return 'suspected_exposure';
@@ -144,9 +169,9 @@ jobs:
             }
           }
           console.log(JSON.stringify({mode:'GET-only-redacted-sample',sample_only:true,
-            checked_origins:origins,checked_routes:routes,summary:metrics,
+            checked_origins:origins,checked_routes:routes,extra_root_checks:rootChecks,summary:metrics,
             full_historical_safety_confirmed:false,deletion_approved:false},null,2));
-          console.log('No poem text, UUID, URL, secret, or source response printed/saved/uploaded. No POST/DELETE/PATCH or model invocation.');
+          console.log('Only bounded safe-host GETs. No poem text, UUID, URL, secret, raw MIME, content hash, or source response printed/saved/uploaded. No POST/DELETE/PATCH or model invocation.');
           if(Object.values(metrics).some(x=>x.suspected_exposure>0||x.unverified>0||x.unverified_origin>0))
             throw Error('Sample needs further security review; no deployment cleared for deletion');
           NODE
