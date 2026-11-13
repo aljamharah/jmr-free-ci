@@ -40,15 +40,17 @@ jobs:
         run: |
           node --test tests/rate-limit.test.js
           node --check functions/_lib/rate-limit.js
-      - name: Whole repository Node regression
-        working-directory: source
-        run: npm test
-      - name: Static build and invariant check (no cloud writes)
+      - name: Build local sanitized dist first (J01 meaning-index tests read it)
         working-directory: source
         run: |
           python -m pip install --disable-pip-version-check python-frontmatter pyyaml
-          node scripts/check_site_foundation.mjs
           node scripts/build_public_site.mjs
+      - name: Whole repository Node regression
+        working-directory: source
+        run: npm test
+      - name: Static invariant check (no cloud writes)
+        working-directory: source
+        run: node scripts/check_site_foundation.mjs
       - name: Real Chrome on offline production-equivalent dist
         working-directory: source
         run: |
