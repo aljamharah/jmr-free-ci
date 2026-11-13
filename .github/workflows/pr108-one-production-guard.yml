@@ -16,12 +16,13 @@ jobs:
           const root="https://aljamharah.pages.dev";
           const deadline=AbortSignal.timeout(20000);
           for(const path of ["/","/jmr.html","/privacy.html"]){
-            const r=await fetch(root+path,{method:"GET",signal:deadline,redirect:"manual"});
+            const r=await fetch(root+path,{method:"GET",signal:deadline,redirect:"follow"});
             assert.equal(r.status,200,path+" unexpectedly protected/unavailable");
+            assert.equal(new URL(r.url).hostname,"aljamharah.pages.dev","Canonical GET redirected to different host");
             assert.match(r.headers.get("content-type")||"",/text\/html/);
             console.log("PUBLIC_GET "+path+" "+r.status);
           }
-          const get=await fetch(root+"/api/jmr",{method:"GET",signal:deadline,redirect:"manual"});
+          const get=await fetch(root+"/api/jmr",{method:"GET",signal:deadline,redirect:"follow"});
           assert.equal(get.status,405,"GET /api/jmr method guard");
           const r=await fetch(root+"/api/jmr",{method:"POST",
             headers:{"content-type":"application/json"},
