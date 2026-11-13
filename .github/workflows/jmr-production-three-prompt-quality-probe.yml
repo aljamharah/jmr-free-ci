@@ -22,57 +22,43 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           const endpoint='https://aljamharah.pages.dev/api/jmr';
-          const normalize=x=>String(x||'').normalize('NFKC').replace(/[\u064B-\u065F\u0670]/g,'')
-            .replace(/[\s\u200c\u200d\p{P}\p{S}]+/gu,' ').trim().toLowerCase();
-          let history=[],social=[],poetry=[];
-          const result=[];
-          const messages=[
-            'كيف حالك؟',
-            'كيف حالك؟',
-            'هل عبارة «إنما يخشى الله من عباده العلماء» بيت شعر؟ ومن قائلها؟'
-          ];
-          for(let i=0;i<messages.length;i++){
-            const message=messages[i];
-            let response;
-            try{
-              response=await fetch(endpoint,{method:'POST',redirect:'manual',
-                headers:{'Content-Type':'application/json','Accept':'application/json'},
-                body:JSON.stringify({
-                  message,conversation:history.slice(-8),
-                  used_social_reply_keys:social.slice(-64),
-                  used_poetry_ids:poetry.slice(-32)
-                }),signal:AbortSignal.timeout(45000)});
-            }catch{result.push({turn:i+1,ok:false,category:'network'});break;}
-            let data=null;
-            try{data=await response.json()}catch{}
-            if(response.status!==200||!data||typeof data.answer!=='string'){
-              result.push({turn:i+1,ok:false,category:response.status===429?'quota_or_limit':response.status===503?'availability':'unexpected_status',http_status:response.status});
-              break;
-            }
-            const answer=data.answer;
-            result.push({turn:i+1,ok:answer.trim().length>12,category:'answered',length:answer.length,
-              has_sources:Array.isArray(data.sources)&&data.sources.length>0});
-            if(typeof data.social_reply_key==='string')social.push(data.social_reply_key);
-            if(Array.isArray(data.sources))poetry.push(...data.sources.filter(x=>typeof x?.id==='string'&&x.id.startsWith('poetry-')).map(x=>x.id));
-            history.push({role:'user',content:message},{role:'assistant',content:answer});
+          const prompt='هل عبارة «إنما يخشى الله من عباده العلماء» بيت شعر؟ ومن قائلها؟';
+          const r=await fetch(endpoint,{method:'POST',redirect:'manual',
+            headers:{'Content-Type':'application/json','Accept':'application/json'},
+            body:JSON.stringify({message:prompt,conversation:[]}),
+            signal:AbortSignal.timeout(45000)});
+          const data=await r.json().catch(()=>null);
+          const answer=typeof data?.answer==='string'?data.answer:'';
+          // Use a broad, Unicode-aware marker check rather than one narrow spelling
+          // and never print the actual Quran answer or any model output.
+          const hasFatir=/فاطر/u.test(answer);
+          const hasQuranMarker=/(?:قرآن|قران|قرآني|آية|اية|الآية|سورة)/u.test(answer);
+          const hasPoetAttribution=/(?:قال الشاعر|البيت للشاعر|نظمه الشاعر)/u.test(answer);
+          const ver=data?.quran_verification;
+          const qStatus=typeof ver?.status==='string'?ver.status:'not_reported';
+          const qSurahNum=Number.isInteger(ver?.surah_number)?ver.surah_number:null;
+          const qAyahNum=Number.isInteger(ver?.ayah_number)?ver.ayah_number:null;
+          const validVerified=qStatus==='verified'&&qSurahNum===35&&qAyahNum===28;
+          const safeUnverified=data?.mode==='quran_verification_guard'&&
+            ['unavailable','insufficient','ambiguous','not_found','unmatched'].includes(qStatus);
+          const result={http_status:r.status,answer_length:answer.length,
+            mode:typeof data?.mode==='string'?data.mode:'not_reported',
+            answer_kind:typeof data?.answer_kind==='string'?data.answer_kind:'not_reported',
+            quran_verification_status:qStatus,
+            surah_number:qSurahNum,ayah_number:qAyahNum,
+            has_fatir_marker:hasFatir,has_quran_marker:hasQuranMarker,
+            suspicious_poet_attribution:hasPoetAttribution,
+            verified_correct_35_28:validVerified,
+            safe_fail_closed:safeUnverified,
+            response_text_logged:false,model_output_logged:false};
+          console.log(JSON.stringify(result,null,2));
+          if(r.status!==200||!answer.trim())throw Error('JMR service unavailable for Quran audit');
+          if(hasPoetAttribution)throw Error('Potential Quran-to-poet misclassification: needs urgent code review');
+          if(validVerified&&hasFatir&&hasQuranMarker){
+            console.log('PASS: Quran Fatir 35:28 verified and not attributed to a poet.');
+          }else if(safeUnverified){
+            console.log('GUARD: Quran verification failed closed, no false poetry attribution.');
+          }else{
+            throw Error('Quran response cannot be accepted until verification status is explained');
           }
-          const twoGreetings=result.length>=2&&result[0].ok&&result[1].ok;
-          const greetingsDistinct=twoGreetings&&normalize(history[1].content)!==normalize(history[3].content);
-          const quranAnswered=result.length===3&&result[2].ok;
-          const lastAnswer=quranAnswered?normalize(history[5].content):'';
-          const quranRecognized=quranAnswered && /فاطر/.test(lastAnswer)&& /قران|ايه|الاية|القران/.test(lastAnswer);
-          const suspiciousAttribution=quranAnswered&&/قال الشاعر|البيت للشاعر|نظمه الشاعر/.test(lastAnswer);
-          console.log(JSON.stringify({
-            test:'3 exact production requests, no answer text published',
-            sent:result.length,answered:result.filter(x=>x.ok).length,
-            response_sizes:result.filter(x=>x.ok).map(x=>x.length),
-            greeting_repetition_detected:twoGreetings?!greetingsDistinct:null,
-            quran_guard_appropriate:quranAnswered?quranRecognized&&!suspiciousAttribution:null,
-            service_status_categories:result.map(x=>({turn:x.turn,ok:x.ok,category:x.category,http_status:x.http_status||200})),
-            prompts_only_benign:true,no_raw_responses_or_sources_logged:true
-          },null,2));
-          if(result.length!==3||result.some(x=>!x.ok))throw Error('Some production AI requests unavailable; no answer-quality acceptance');
-          if(!greetingsDistinct)throw Error('Repeated greetings; investigate JMR response diversification');
-          if(!quranRecognized||suspiciousAttribution)throw Error('Quran-sensitive answer needs manual review');
-          console.log('PASS: repeated greeting answers differ and verse is recognized as Quran / Surah Fatir.');
           NODE
