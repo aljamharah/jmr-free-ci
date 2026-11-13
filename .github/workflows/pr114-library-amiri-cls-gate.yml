@@ -121,8 +121,10 @@ jobs:
             const avg=arr=>arr.reduce((n,x)=>n+x.cls,0)/arr.length;
             const before=avg(results.baseline),after=avg(results.candidate);
             assert.ok(results.candidate.every((x,i)=>x.introHeight===results.baseline[i].introHeight&&x.statusHidden),"Final layout differs");
-            assert.ok(before>=0.08,"Baseline CLS too low: repeat controlled test");
-            assert.ok(after<before*0.5,"Preload did not reduce CLS by at least 50 percent");
+            assert.ok(results.baseline.every(x=>x.cls>=0.02),"Baseline CLS below measurable threshold; repeat controlled test");
+            assert.ok(results.candidate.every((x,i)=>x.cls<=0.02&&x.cls<results.baseline[i].cls*0.5),
+              "Candidate must be <=0.02 CLS and improve at least 50% in EVERY matched run");
+            assert.ok(after<before*0.5,"Mean preload improvement below 50 percent");
             console.log("LIBRARY_EXACT_CLS_GATE PASS before="+before.toFixed(4)+" after="+after.toFixed(4)+" reduction="+Math.round((1-after/before)*100)+"%");
           }finally{await browser.close();await Promise.all([left,right].map(x=>new Promise(r=>x.http.close(r))));}
           NODE
