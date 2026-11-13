@@ -1,0 +1,78 @@
+name: JMR Production minimal live response quality and Quran safety probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/jmr-production-three-prompt-quality-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Ask exactly three short benign questions and log metrics only
+        run: |
+          node --input-type=module <<'NODE'
+          const endpoint='https://aljamharah.pages.dev/api/jmr';
+          const normalize=x=>String(x||'').normalize('NFKC').replace(/[\u064B-\u065F\u0670]/g,'')
+            .replace(/[\s\u200c\u200d\p{P}\p{S}]+/gu,' ').trim().toLowerCase();
+          let history=[],social=[],poetry=[];
+          const result=[];
+          const messages=[
+            'كيف حالك؟',
+            'كيف حالك؟',
+            'هل عبارة «إنما يخشى الله من عباده العلماء» بيت شعر؟ ومن قائلها؟'
+          ];
+          for(let i=0;i<messages.length;i++){
+            const message=messages[i];
+            let response;
+            try{
+              response=await fetch(endpoint,{method:'POST',redirect:'manual',
+                headers:{'Content-Type':'application/json','Accept':'application/json'},
+                body:JSON.stringify({
+                  message,conversation:history.slice(-8),
+                  used_social_reply_keys:social.slice(-64),
+                  used_poetry_ids:poetry.slice(-32)
+                }),signal:AbortSignal.timeout(45000)});
+            }catch{result.push({turn:i+1,ok:false,category:'network'});break;}
+            let data=null;
+            try{data=await response.json()}catch{}
+            if(response.status!==200||!data||typeof data.answer!=='string'){
+              result.push({turn:i+1,ok:false,category:response.status===429?'quota_or_limit':response.status===503?'availability':'unexpected_status',http_status:response.status});
+              break;
+            }
+            const answer=data.answer;
+            result.push({turn:i+1,ok:answer.trim().length>12,category:'answered',length:answer.length,
+              has_sources:Array.isArray(data.sources)&&data.sources.length>0});
+            if(typeof data.social_reply_key==='string')social.push(data.social_reply_key);
+            if(Array.isArray(data.sources))poetry.push(...data.sources.filter(x=>typeof x?.id==='string'&&x.id.startsWith('poetry-')).map(x=>x.id));
+            history.push({role:'user',content:message},{role:'assistant',content:answer});
+          }
+          const twoGreetings=result.length>=2&&result[0].ok&&result[1].ok;
+          const greetingsDistinct=twoGreetings&&normalize(history[1].content)!==normalize(history[3].content);
+          const quranAnswered=result.length===3&&result[2].ok;
+          const lastAnswer=quranAnswered?normalize(history[5].content):'';
+          const quranRecognized=quranAnswered && /فاطر/.test(lastAnswer)&& /قران|ايه|الاية|القران/.test(lastAnswer);
+          const suspiciousAttribution=quranAnswered&&/قال الشاعر|البيت للشاعر|نظمه الشاعر/.test(lastAnswer);
+          console.log(JSON.stringify({
+            test:'3 exact production requests, no answer text published',
+            sent:result.length,answered:result.filter(x=>x.ok).length,
+            response_sizes:result.filter(x=>x.ok).map(x=>x.length),
+            greeting_repetition_detected:twoGreetings?!greetingsDistinct:null,
+            quran_guard_appropriate:quranAnswered?quranRecognized&&!suspiciousAttribution:null,
+            service_status_categories:result.map(x=>({turn:x.turn,ok:x.ok,category:x.category,http_status:x.http_status||200})),
+            prompts_only_benign:true,no_raw_responses_or_sources_logged:true
+          },null,2));
+          if(result.length!==3||result.some(x=>!x.ok))throw Error('Some production AI requests unavailable; no answer-quality acceptance');
+          if(!greetingsDistinct)throw Error('Repeated greetings; investigate JMR response diversification');
+          if(!quranRecognized||suspiciousAttribution)throw Error('Quran-sensitive answer needs manual review');
+          console.log('PASS: repeated greeting answers differ and verse is recognized as Quran / Surah Fatir.');
+          NODE
