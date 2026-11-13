@@ -18,7 +18,6 @@ jobs:
           let failed = 0, passed = 0;
           const matrix = [
             {name:"production",origin:"https://aljamharah.pages.dev",ai:true},
-            {name:"production-project-preview",origin:"https://3a239e79.aljamharah.pages.dev",ai:true},
             {name:"isolated-staging",origin:"https://aljamharah-staging.pages.dev",ai:false}
           ];
           async function test(name, origin, method, expected, headers, body) {
@@ -40,10 +39,30 @@ jobs:
             await test(row.name+":empty-message",row.origin,"POST",row.ai?400:503,
               {"Content-Type":"application/json"},"{}");
           }
+          // Preview is now protected by Cloudflare Access. Never POST to it anonymously.
+          // This is an Access enforcement check, NOT a Preview JMR runtime test.
+          const previewOrigin="https://3a239e79.aljamharah.pages.dev";
+          const accessResponse=await fetch(previewOrigin+"/api/jmr",{
+            method:"GET",redirect:"manual",signal:AbortSignal.timeout(20000)
+          });
+          const redirect=accessResponse.headers.get("location")||"";
+          let login=false;
+          try{
+            const url=new URL(redirect,previewOrigin);
+            login=url.protocol==="https:" &&
+              (url.hostname.endsWith(".cloudflareaccess.com")||
+                (url.origin===previewOrigin&&url.pathname.startsWith("/cdn-cgi/access/")));
+          }catch{}
+          const protectedPreview=[401,403].includes(accessResponse.status)||
+            ([301,302,303,307,308].includes(accessResponse.status)&&login);
+          await accessResponse.body?.cancel();
+          if(!protectedPreview)throw Error("Security regression: pinned Preview no longer requires Access login");
+          console.log("JMR_GUARD preview: ACCESS_PROTECTED; runtime behavior NOT_TESTED (no bypass attempted).");
           const {appendFileSync}=await import("node:fs");
-          const summary="JMR API no-model runtime guard: "+passed+"/"+(passed+failed)+" passed.\n"+
+          const summary="JMR public Production/staging API no-model runtime guard: "+passed+"/"+(passed+failed)+" passed.\n"+
                         "No user text, no model request, no production config mutation. "+
-                        "Empty-message checks use at most one rate-limit attempt per AI-enabled origin.\n";
+                        "Preview Access protection PASSED; authenticated Preview runtime guards SKIPPED (no service token/bypass).\n"+
+                        "Empty-message checks use at most one rate-limit attempt per public AI-enabled origin.\n";
           if(process.env.GITHUB_STEP_SUMMARY)appendFileSync(process.env.GITHUB_STEP_SUMMARY,summary);
           console.log("JMR_GUARD_SUMMARY pass="+passed+" fail="+failed);
           if(failed>0)process.exitCode=1;
