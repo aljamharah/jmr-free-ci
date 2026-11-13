@@ -1,0 +1,197 @@
+name: SEC01 verify weekly public Preview Access coverage (draft test)
+
+on:
+  push:
+    branches: [ci/sec01-weekly-access-protection-20261113]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-historical-access-reported-url-coverage
+  cancel-in-progress: false
+
+jobs:
+  coverage:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/ci/sec01-weekly-access-protection-20261113'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read-only snapshot, no cookies or response bodies, verify Access and public canonical
+        env:
+          ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const account=process.env.ACCOUNT,token=process.env.TOKEN;
+          assert.match(account||'',/^[a-f0-9]{32}$/i,'Missing account configuration');
+          assert.ok(token?.length>=12,'Missing existing Pages API read credential');
+          const projects=['aljamharah','aljamharah-staging'],environments=['production','preview'];
+          const tasks=new Map(),summaries={},seenIDs=new Set();
+          const api='https://api.cloudflare.com/client/v4/accounts/'+account+'/pages/projects/';
+          async function getCloudflare(path){
+            const r=await fetch(api+path,{method:'GET',redirect:'error',headers:{
+              Authorization:'Bearer '+token,Accept:'application/json'},signal:AbortSignal.timeout(20000)});
+            if(!r.ok)throw Error('Cloudflare GET status '+r.status);
+            const j=await r.json();
+            if(j?.success!==true)throw Error('Cloudflare GET rejected');
+            return j;
+          }
+          function validateOrigin(raw,project){
+            if(typeof raw!=='string'||raw.length>1024||/\s/.test(raw))return null;
+            try{
+              const u=new URL(raw),host=project+'.pages.dev';
+              if(u.protocol!=='https:'||u.username||u.password||u.port||
+                 u.pathname!=='/'||u.search||u.hash)return null;
+              if(u.hostname===host)return {kind:'canonical_public',origin:u.origin};
+              if(!u.hostname.endsWith('.'+host))return null;
+              const prefix=u.hostname.slice(0,-host.length-1);
+              if(!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(prefix))return null;
+              return {kind:'preview_host',origin:u.origin};
+            }catch{return null;}
+          }
+          function addTarget(origin,path,project,type){
+            const key=origin+'|'+path;
+            if(!tasks.has(key))tasks.set(key,{origin,path,project,type});
+          }
+          for(const project of projects){
+            const metadata=(await getCloudflare(project)).result;
+            if(metadata?.name!==project||metadata.build_config?.destination_dir!=='dist')
+              throw Error('Unexpected Pages project build configuration');
+            for(const env of environments){
+              const stat={listed:0,legacy_raw_root:0,alias_fields_not_reported:0,
+                reported_alias_entries:0,canonical_alias_skipped:0,unknown_hosts:0,
+                checked_deployment_url:0,checked_alias:0};
+              summaries[project+'/'+env]=stat;
+              const prefix=project+'/deployments?env='+env+'&per_page=25&page=';
+              const first=await getCloudflare(prefix+'1');
+              const info0=first.result_info;
+              if(!info0||!Number.isSafeInteger(info0.total_count)||
+                 !Number.isSafeInteger(info0.total_pages)||!Number.isSafeInteger(info0.per_page)||
+                 info0.per_page<1||info0.per_page>25||info0.total_count<0||
+                 info0.total_pages!==(info0.total_count===0?0:Math.ceil(info0.total_count/info0.per_page))||
+                 info0.total_pages>100)throw Error('Invalid initial Pages pagination');
+              const ids=new Set();
+              for(let page=1;page<=Math.max(info0.total_pages,1);page++){
+                const row=page===1?first:await getCloudflare(prefix+page);
+                const info=row.result_info;
+                if(!Array.isArray(row.result)||info?.page!==page||
+                   info?.total_count!==info0.total_count||
+                   info?.total_pages!==info0.total_pages||
+                   info?.per_page!==info0.per_page||
+                   row.result.length>info.per_page||
+                   (page<info0.total_pages&&row.result.length!==info.per_page))
+                  throw Error('Inventory changed while reading Pages listing');
+                for(const d of row.result){
+                  if(!d||typeof d.id!=='string'||ids.has(d.id)||seenIDs.has(d.id)||
+                     d.project_name!==project||d.environment!==env)
+                    throw Error('Invalid or duplicate Pages deployment');
+                  ids.add(d.id);seenIDs.add(d.id);stat.listed++;
+                  const primary=validateOrigin(d.url,project);
+                  if(!primary||primary.kind!=='preview_host'){
+                    stat.unknown_hosts++;continue;
+                  }
+                  const legacy=d.build_config?.destination_dir==='';
+                  if(legacy)stat.legacy_raw_root++;
+                  addTarget(primary.origin,legacy?'/database/schema.sql':'/',project,'deployment');
+                  stat.checked_deployment_url++;
+                  if(d.aliases==null)stat.alias_fields_not_reported++;
+                  else{
+                    if(!Array.isArray(d.aliases))throw Error('Invalid alias list');
+                    for(const raw of d.aliases){
+                      stat.reported_alias_entries++;
+                      const alias=validateOrigin(raw,project);
+                      if(!alias){stat.unknown_hosts++;continue;}
+                      if(alias.kind==='canonical_public'){
+                        stat.canonical_alias_skipped++;continue;
+                      }
+                      addTarget(alias.origin,'/',project,'alias');stat.checked_alias++;
+                    }
+                  }
+                }
+              }
+              if(ids.size!==info0.total_count)throw Error('Inventory incomplete or count changed');
+            }
+          }
+          const metrics={access_login:0,access_denied:0,public_200:0,unknown_redirect:0,
+            other_status:0,network_error:0,verified_deployment_urls:0,verified_alias_routes:0};
+          const outcomes={};
+          let cursor=0;
+          function accessRedirect(location,origin){
+            if(!location)return false;
+            try{
+              const u=new URL(location,origin);
+              return u.protocol==='https:'&&!u.username&&!u.password&&(
+                u.hostname.endsWith('.cloudflareaccess.com')||
+                (u.origin===origin&&u.pathname.startsWith('/cdn-cgi/access/')));
+            }catch{return false}
+          }
+          const work=[...tasks.values()];
+          async function runTask(t){
+            let classification='network_error';
+            try{
+              const r=await fetch(t.origin+t.path,{method:'GET',redirect:'manual',
+                headers:{Accept:'text/html,application/json','Cache-Control':'no-cache'},
+                signal:AbortSignal.timeout(18000)});
+              if([301,302,303,307,308].includes(r.status)&&
+                 accessRedirect(r.headers.get('location'),t.origin))
+                classification='access_login';
+              else if(r.status===401||r.status===403)classification='access_denied';
+              else if(r.status===200)classification='public_200';
+              else if([301,302,303,307,308].includes(r.status))classification='unknown_redirect';
+              else classification='other_status';
+              await r.body?.cancel().catch(()=>{});
+            }catch{}
+            metrics[classification]++;
+            if(!outcomes[t.project])outcomes[t.project]={verified:0,unverified:0};
+            const protectedNow=classification==='access_login'||classification==='access_denied';
+            if(protectedNow){outcomes[t.project].verified++;
+              if(t.type==='deployment')metrics.verified_deployment_urls++;
+              else metrics.verified_alias_routes++;
+            }else outcomes[t.project].unverified++;
+          }
+          async function worker(){
+            while(cursor<work.length){
+              const t=work[cursor++];
+              if(t)await runTask(t);
+            }
+          }
+          await Promise.all(Array.from({length:8},()=>worker()));
+          let production_public=0,production_nonpublic=0;
+          for(const project of projects){
+            const origin='https://'+project+'.pages.dev';
+            try{
+              const r=await fetch(origin+'/',{method:'GET',redirect:'manual',
+                signal:AbortSignal.timeout(18000)});
+              if(r.status===200)production_public++;
+              else production_nonpublic++;
+              await r.body?.cancel().catch(()=>{});
+            }catch{production_nonpublic++;}
+          }
+          const unreported_alias_lists=Object.values(summaries).reduce((n,x)=>n+x.alias_fields_not_reported,0);
+          const unknown_hosts=Object.values(summaries).reduce((n,x)=>n+x.unknown_hosts,0);
+          const report={test:'SEC01 anonymous historical Pages Access coverage',
+            read_only:true,listed_deployments:seenIDs.size,
+            unique_checked_routes:work.length,
+            total_checked_deployment_urls:metrics.verified_deployment_urls,
+            total_checked_reported_alias_routes:metrics.verified_alias_routes,
+            unreported_alias_lists,unknown_hosts,
+            protection_results:metrics,per_project:outcomes,
+            canonical_production_200:production_public,
+            canonical_production_not_200:production_nonpublic,
+            all_reported_urls_protected:metrics.public_200===0&&metrics.unknown_redirect===0&&
+              metrics.other_status===0&&metrics.network_error===0&&unknown_hosts===0&&
+              metrics.access_login+metrics.access_denied===work.length,
+            all_alias_urls_known:unreported_alias_lists===0,
+            response_bodies_logged:false,hosts_ids_secrets_logged:false,
+            cloudflare_mutations:0,ai_model_calls:0,
+            historical_deletion_approved:false};
+          console.log(JSON.stringify(report,null,2));
+          if(!report.all_reported_urls_protected||production_public!==2)
+            throw Error('Historical Access coverage or canonical production safety cannot be accepted');
+          console.log('PASS: every API-reported hashed deployment and alias route tested is anonymous-blocked; canonical production is public. Unknown aliases remain unverified.');
+          NODE
