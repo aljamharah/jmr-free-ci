@@ -1,0 +1,126 @@
+name: SEC01 verify source-file signatures on legacy Pages (GET only)
+
+on:
+  push:
+    branches:
+      - ci/sec01-legacy-actual-source-signature-20261113
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Confirm legacy SQL/YAML sources by content signatures only; never log bodies
+        env:
+          CF_ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CF_TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const account=process.env.CF_ACCOUNT,token=process.env.CF_TOKEN;
+          if(!/^[a-f0-9]{32}$/i.test(account||'')||!(token?.length>=12))
+            throw Error("Missing configured Cloudflare read token");
+          const api='https://api.cloudflare.com/client/v4/accounts/'+account+'/pages/projects/aljamharah/deployments';
+          async function cfPage(page){
+            const r=await fetch(api+'?env=preview&per_page=25&page='+page,{
+              method:'GET',redirect:'error',headers:{Authorization:'Bearer '+token,Accept:'application/json'},
+              signal:AbortSignal.timeout(20000)});
+            if(!r.ok)throw Error("Cloudflare API unavailable");
+            const j=await r.json();
+            if(j?.success!==true||!Array.isArray(j.result)||!j.result_info)
+              throw Error("Malformed deployment inventory");
+            return j;
+          }
+          function origin(raw){
+            try{
+              const u=new URL(raw),suffix='.aljamharah.pages.dev';
+              const sub=u.hostname.endsWith(suffix)?u.hostname.slice(0,-suffix.length):'';
+              if(!sub||!/^[a-z0-9][a-z0-9-]{0,62}$/.test(sub)||u.protocol!=='https:'||
+                 u.username||u.password||u.port||u.pathname!=='/'||u.search||u.hash)return null;
+              return u.origin;
+            }catch{return null;}
+          }
+          const first=await cfPage(1),pages=first.result_info.total_pages,total=first.result_info.total_count;
+          if(!Number.isSafeInteger(total)||!Number.isSafeInteger(pages)||pages<1||pages>100)
+            throw Error("Invalid pagination metadata");
+          const seen=new Set(),targets=[];
+          for(let p=1;p<=pages;p++){
+            const j=p===1?first:await cfPage(p);
+            if(j.result_info?.page!==p||j.result_info?.total_count!==total||
+               j.result_info?.total_pages!==pages||j.result_info?.per_page!==25)
+              throw Error("Deployment list changed mid-scan");
+            for(const d of j.result){
+              if(!d.id||seen.has(d.id))throw Error("Deployment duplicate");
+              seen.add(d.id);
+              if(d.build_config?.destination_dir!=='')continue;
+              const u=origin(d.url);
+              if(!u)throw Error("Unknown Pages origin; no external GET sent");
+              targets.push(u);
+            }
+          }
+          if(seen.size!==total||new Set(targets).size!==targets.length)
+            throw Error("Incomplete deployment count or duplicate origin");
+          const paths={
+            workflow:'/.github/workflows/validate-library.yml',
+            database:'/database/schema.sql'
+          };
+          const aggregate={
+            workflow:{signature_confirmed:0,html_response:0,other_200:0,blocked:0,unverified:0},
+            database:{signature_confirmed:0,html_response:0,other_200:0,blocked:0,unverified:0}
+          };
+          async function inspect(url,key){
+            let r;
+            try{r=await fetch(url+paths[key],{
+              method:'GET',redirect:'manual',signal:AbortSignal.timeout(15000)
+            });}catch{return 'unverified';}
+            if(r.status===403||r.status===404)return 'blocked';
+            if(r.status!==200)return 'unverified';
+            const mime=(r.headers.get('content-type')||'').split(';',1)[0].toLowerCase();
+            const reader=r.body?.getReader();
+            if(!reader)return 'unverified';
+            let bytes=0;const chunks=[];
+            try{
+              while(true){
+                const q=await reader.read();
+                if(q.done)break;
+                bytes+=q.value.byteLength;
+                if(bytes>131072){await reader.cancel();return 'unverified';}
+                chunks.push(Buffer.from(q.value));
+              }
+            }catch{return 'unverified';}
+            const body=Buffer.concat(chunks).toString('utf8');
+            const isSource=key==='workflow'
+              ? /^jobs:\s*$/m.test(body)&&/^name:\s*\S/m.test(body)&&/\buses:\s*actions\//m.test(body)
+              : /CREATE\s+TABLE\b/i.test(body)&&/CREATE\s+(?:UNIQUE\s+)?INDEX\b/i.test(body);
+            if(isSource)return 'signature_confirmed';
+            if(mime==='text/html')return 'html_response';
+            return 'other_200';
+          }
+          // Limit parallel access to eight origins (two GET routes each); never output URLs.
+          let cursor=0;
+          async function worker(){
+            while(cursor<targets.length){
+              const i=cursor++;
+              for(const key of Object.keys(paths)){
+                const result=await inspect(targets[i],key);
+                aggregate[key][result]++;
+              }
+            }
+          }
+          await Promise.all(Array.from({length:8},()=>worker()));
+          const confirms=aggregate.workflow.signature_confirmed+aggregate.database.signature_confirmed;
+          const unresolved=['workflow','database'].reduce((n,k)=>
+            n+aggregate[k].unverified+aggregate[k].other_200,0);
+          console.log(JSON.stringify({
+            scope:"606 legacy empty-output-dir preview builds; exact count revalidated",
+            total_preview_records:seen.size,root_build_origins:targets.length,
+            checked_routes:targets.length*2,classification:aggregate,
+            exact_source_signature_confirmations:confirms,
+            unresolved_routes:unresolved,
+            no_bodies_or_identifiers_logged:true,no_mutations:true,deletion_approved:false
+          },null,2));
+          if(confirms||unresolved)process.exitCode=1; // deliberate fail-closed security gate
+          NODE
