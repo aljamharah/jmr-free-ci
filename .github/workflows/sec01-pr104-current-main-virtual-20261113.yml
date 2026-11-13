@@ -1,0 +1,65 @@
+name: SEC01 PR104 current-main isolated four-file virtual merge and parity
+on:
+  push:
+    branches:
+      - ci/sec01-allowlist-new-main-virtual-20261113
+permissions:
+  contents: read
+jobs:
+  virtual-merge:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact private main read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: f931fbe536229517232d6eb1f3bc4cb498c9f4d5
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+      - name: Checkout exact private PR104 candidate read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 25367bf11efb0d325d362dbca4a71a5bc02e75c7
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Assemble isolated candidate and pin exactly four files
+        run: |
+          test "$(git -C baseline rev-parse HEAD)" = "f931fbe536229517232d6eb1f3bc4cb498c9f4d5"
+          test "$(git -C candidate rev-parse HEAD)" = "25367bf11efb0d325d362dbca4a71a5bc02e75c7"
+          cp -a baseline virtual
+          for file in \
+            scripts/build_public_site.mjs \
+            scripts/security/public-content-export-policy.mjs \
+            scripts/test_public_site_build.mjs \
+            tests/public-content-export-policy.test.mjs; do
+            mkdir -p "virtual/$(dirname "$file")"
+            cp "candidate/$file" "virtual/$file"
+            cmp "candidate/$file" "virtual/$file"
+          done
+          test "$(git -C virtual diff --name-only | wc -l)" -eq 2
+          test -f virtual/scripts/security/public-content-export-policy.mjs
+          test -f virtual/tests/public-content-export-policy.test.mjs
+      - name: Build strict baseline dist
+        working-directory: baseline
+        run: node scripts/build_public_site.mjs
+      - name: Validate new main + PR104 candidate combined
+        working-directory: virtual
+        run: |
+          node scripts/check_site_foundation.mjs
+          node --test tests/public-content-export-policy.test.mjs
+          node --test tests/rate-limit.test.js
+      - name: Strict byte-for-byte public dist parity
+        run: |
+          node virtual/scripts/validation/compare-public-dist.mjs baseline/build-reports/dist-inventory.json virtual/build-reports/dist-inventory.json
+      - name: Verify private checkouts unchanged
+        run: |
+          test -z "$(git -C baseline status --porcelain --untracked-files=no)"
+          test -z "$(git -C candidate status --porcelain --untracked-files=no)"
