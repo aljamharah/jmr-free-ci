@@ -1,12 +1,12 @@
-name: PR81 preview performance and WCAG compare
+name: PR81 production performance and WCAG release gate
 on:
   push:
-    branches: [ci/pr81-preview-perf-a11y-2026-11-13]
+    branches: [ci/pr81-production-accessibility-gate-2026-11-13]
 permissions:
   contents: read
 jobs:
   audit:
-    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/ci/pr81-preview-perf-a11y-2026-11-13'
+    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/ci/pr81-production-accessibility-gate-2026-11-13'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -20,7 +20,7 @@ jobs:
         run: npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright @axe-core/playwright
       - name: GET-only Chrome mobile performance baseline, WCAG A/AA
         env:
-          SITE: https://02cbfe8d.aljamharah.pages.dev
+          SITE: https://aljamharah.pages.dev
         run: |
           node --input-type=module <<'NODE'
           import {chromium} from "playwright";
