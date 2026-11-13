@@ -1,0 +1,45 @@
+name: Validate pixel-identical lossless logo optimization
+on:
+  push:
+    branches: [ci/official-logo-lossless-analysis-2026-11-13]
+permissions:
+  contents: read
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Prepare Pillow for lossless analysis
+        run: python -m pip install --disable-pip-version-check 'Pillow>=11,<13'
+      - name: Confirm exact official source and compare pixel-perfect variant
+        run: |
+          python - <<'PY'
+          import urllib.request,hashlib,base64,io
+          from PIL import Image,ImageChops
+          path="assets/AFF71118-81CC-48DF-A661-4410C687EC8F.png"
+          url="https://aljamharah.pages.dev/"+path
+          original=urllib.request.urlopen(url,timeout=30).read()
+          actual_git_blob=hashlib.sha1(b"blob "+str(len(original)).encode()+b"\x00"+original).hexdigest()
+          expected_git_blob="b955612f2c35dde01aa8b75c56807e8738d962e6"
+          assert actual_git_blob==expected_git_blob,"Hosted logo does not match the official original Git blob"
+          source=Image.open(io.BytesIO(original))
+          source.load()
+          assert source.format=="PNG"
+          canvas=source.convert("RGBA")
+          out=io.BytesIO()
+          canvas.save(out,format="WEBP",lossless=True,method=6,exact=True)
+          encoded=out.getvalue()
+          decoded=Image.open(io.BytesIO(encoded)).convert("RGBA")
+          assert decoded.size==canvas.size
+          assert ImageChops.difference(canvas,decoded).getbbox() is None,"Image pixel mismatch"
+          print(f"LOGO_OPTIMIZE original_bytes={len(original)} optimized_bytes={len(encoded)} pixel_equal=yes original_sha1={actual_git_blob} width={canvas.width} height={canvas.height} format={source.mode}")
+          if len(encoded)>800000 or len(encoded)>.7*len(original):
+            print("LOGO_OPTIMIZE SKIP: optimized variant above target budget")
+          else:
+            print("START_LOSSLESS_LOGO_BASE64")
+            print(base64.b64encode(encoded).decode("ascii"))
+            print("END_LOSSLESS_LOGO_BASE64")
+          PY
