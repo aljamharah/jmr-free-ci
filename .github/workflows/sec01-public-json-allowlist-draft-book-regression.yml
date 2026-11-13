@@ -69,6 +69,9 @@ jobs:
             return {tests:field('tests'),pass:field('pass'),fail:field('fail')};
           };
           const a=score('before-node.tap'),b=score('after-node.tap');
+          const failedTitles=[...readFileSync('after-node.tap','utf8').matchAll(/^not ok \\d+ - (.*)$/gm)]
+            .map(m=>m[1].slice(0,160));
+          if(failedTitles.length)console.log(JSON.stringify({candidate_failed_test_names:failedTitles}));
           console.log(JSON.stringify({baseline:a,candidate:b,baseline_ok:process.env.BEFORE==='0',
             candidate_ok:process.env.AFTER==='0'}));
           assert.equal(process.env.BEFORE,'0');
