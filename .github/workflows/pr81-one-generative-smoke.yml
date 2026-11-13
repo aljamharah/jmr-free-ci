@@ -1,0 +1,37 @@
+name: One limited real JMR model smoke on PR81 preview
+on:
+  push:
+    branches: [ci/pr81-one-generative-smoke-2026-11-13]
+permissions:
+  contents: read
+jobs:
+  sample:
+    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/ci/pr81-one-generative-smoke-2026-11-13'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: One synthetic language question; no external URLs or personal data
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          const endpoint="https://02cbfe8d.aljamharah.pages.dev/api/jmr";
+          const start=Date.now();
+          const question="ما الفرق بين التشبيه والاستعارة؟ أجب في ثلاث جمل ومثال من إنشائك دون نسبة إلى شاعر.";
+          const result=await fetch(endpoint,{method:"POST",
+            headers:{"content-type":"application/json"},
+            body:JSON.stringify({message:question,conversation:[]}),
+            signal:AbortSignal.timeout(35000)});
+          let payload;try{payload=await result.json()}catch{throw Error("JMR responded with non-JSON status="+result.status)}
+          console.log("GENERATIVE_SMOKE HTTP "+result.status+" ms="+(Date.now()-start)+
+            " mode="+String(payload?.mode||"")+
+            " answer_kind="+String(payload?.answer_kind||"")+
+            " rate_stage="+String(result.headers.get("x-jmr-rate-limit-stage")||"none"));
+          if(result.status!==200)throw Error("JMR is unavailable; "+String(payload?.error||"unknown").slice(0,120));
+          const answer=String(payload.answer||"").trim();
+          assert.ok(answer.length>=25&&answer.length<=5000,"Answer length outside smoke range");
+          assert.ok(/تشبيه|التشبيه/.test(answer),"Missing explanation of simile");
+          assert.ok(/استعار|استعارة/.test(answer),"Missing metaphor");
+          assert.ok(!/إنما يخشى الله من عباده العلماء/.test(answer),"Unrelated Quran passage appeared");
+          assert.notEqual(payload.mode,"curated_exact_answer","Did not reach noncurated JMR route");
+          console.log("GENERATIVE_SMOKE PASS excerpt="+JSON.stringify(answer.slice(0,600)));
+          NODE
