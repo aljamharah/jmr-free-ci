@@ -1,0 +1,32 @@
+name: PR108 Production post-release one guarded request (no model)
+on:
+  push:
+    branches: [ci/pr108-postrelease-one-guard-20261113]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Public production read/one malformed guard without AI
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          const root="https://aljamharah.pages.dev";
+          const deadline=AbortSignal.timeout(20000);
+          for(const path of ["/","/jmr.html","/privacy.html"]){
+            const r=await fetch(root+path,{method:"GET",signal:deadline,redirect:"manual"});
+            assert.equal(r.status,200,path+" unexpectedly protected/unavailable");
+            assert.match(r.headers.get("content-type")||"",/text\/html/);
+            console.log("PUBLIC_GET "+path+" "+r.status);
+          }
+          const get=await fetch(root+"/api/jmr",{method:"GET",signal:deadline,redirect:"manual"});
+          assert.equal(get.status,405,"GET /api/jmr method guard");
+          const r=await fetch(root+"/api/jmr",{method:"POST",
+            headers:{"content-type":"application/json"},
+            body:'{"malformed_json":',redirect:"manual",signal:deadline});
+          assert.ok([400,429].includes(r.status),"unexpected production JMR guard status "+r.status);
+          if(r.status===429)assert.equal(r.headers.get("x-jmr-rate-limit-stage"),"limit");
+          console.log("PRODUCTION_SAFE_GUARD status="+r.status+" GET=4; POST=1; no valid prompt; no model inference; no cloud mutations; verified normal canonical public access");
+          NODE
