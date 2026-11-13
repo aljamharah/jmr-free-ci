@@ -1,0 +1,179 @@
+name: SEC01 legacy root-build source-path exposure (GET only redacted)
+
+on:
+  push:
+    branches:
+      - ci/sec01-legacy-source-paths-readonly-20261113
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Inspect known historical root-build paths without publishing responses or identifiers
+        env:
+          CF_ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CF_TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const account=process.env.CF_ACCOUNT,token=process.env.CF_TOKEN;
+          if(!/^[a-f0-9]{32}$/i.test(account||"")||!(token?.length>=12))
+            throw Error("Missing existing read-only credential; no requests sent");
+          const project="aljamharah",env="preview",limit=25;
+          const api="https://api.cloudflare.com/client/v4/accounts/"+account+"/pages/projects/"+project+"/deployments";
+          const cases=[
+            ["poets","/content/poets.json"],
+            ["books","/content/books/index.json"],
+            ["settings","/content/settings/site.json"],
+            ["github","/.github/workflows/validate-library.yml"],
+            ["database","/database/schema.sql"],
+            ["functions","/functions/api/jmr.js"]
+          ];
+          const counts=Object.fromEntries(cases.map(([key])=>[key,{}]));
+          const bucket=(key,value)=>counts[key][value]=(counts[key][value]||0)+1;
+          const allowedPoet=new Set(["slug","name_ar","kunya","gender","era_id",
+            "state_id","birth_year","death_year","biography","source_reference",
+            "source_url","secondary_source_url","publication_status"]);
+          async function apiPage(page){
+            const r=await fetch(api+"?env="+env+"&per_page="+limit+"&page="+page,{
+              method:"GET",redirect:"error",
+              headers:{Authorization:"Bearer "+token,Accept:"application/json"},
+              signal:AbortSignal.timeout(20000)
+            });
+            if(!r.ok)throw Error("Cloudflare metadata GET failed HTTP "+r.status);
+            const j=await r.json();
+            if(j?.success!==true||!Array.isArray(j.result)||!j.result_info)
+              throw Error("Unexpected Cloudflare metadata");
+            return j;
+          }
+          function safeOrigin(raw){
+            try{
+              const u=new URL(raw);
+              const suffix="."+project+".pages.dev";
+              const sub=u.hostname.endsWith(suffix)?u.hostname.slice(0,-suffix.length):"";
+              if(u.protocol!=="https:"||!sub||!/^[a-z0-9][a-z0-9-]{0,62}$/.test(sub)||
+                 u.username||u.password||u.port||u.pathname!=="/"||u.search||u.hash)return null;
+              return u.origin;
+            }catch{return null}
+          }
+          async function readBounded(response,max=524288){
+            const length=Number(response.headers.get("content-length")||"0");
+            if(length>max)return null;
+            const rd=response.body?.getReader();
+            if(!rd)return null;
+            const chunks=[];let size=0;
+            while(true){
+              const v=await rd.read();
+              if(v.done)break;
+              size+=v.value.byteLength;
+              if(size>max){await rd.cancel();return null;}
+              chunks.push(Buffer.from(v.value));
+            }
+            return Buffer.concat(chunks).toString("utf8");
+          }
+          async function pathGet(origin,path){
+            try{
+              const r=await fetch(origin+path,{
+                method:"GET",redirect:"manual",signal:AbortSignal.timeout(16000)
+              });
+              const mime=(r.headers.get("content-type")||"").split(";",1)[0].toLowerCase();
+              if(r.status===403||r.status===404)return {kind:"blocked"};
+              if(r.status!==200)return {kind:"unverified_status"};
+              const body=await readBounded(r);
+              if(body===null)return {kind:"unverified_size"};
+              return {kind:"received",body,mime};
+            }catch{return {kind:"unverified_network"}}
+          }
+          function isSecretKey(key){
+            return /(?:secret|password|api[_-]?key|private[_-]?key|access[_-]?token|client[_-]?secret)/i.test(key);
+          }
+          function classify(key,x,home){
+            if(x.kind!=="received")return x.kind;
+            const {body,mime}=x;
+            if(mime==="text/html"){
+              if(home?.kind==="received"&&home.mime==="text/html"&&home.body===body)
+                return "same_public_homepage_html";
+              return "unverified_html_other";
+            }
+            if(key==="github"||key==="database"||key==="functions")
+              return "SUSPECTED_PRIVATE_SOURCE_EXPOSED";
+            if(mime!=="application/json"&&mime!=="text/plain")
+              return "unverified_mime";
+            let data;
+            try{data=JSON.parse(body);}catch{return "unverified_nonjson";}
+            if(key==="poets"){
+              if(!Array.isArray(data?.poets))return "unverified_poets_schema";
+              if(data.poets.some(row=>!row||row.publication_status!=="published"||
+                   Object.keys(row).some(k=>!allowedPoet.has(k))))
+                return "SUSPECTED_EDITORIAL_DATA";
+              return "published_poet_index_only";
+            }
+            if(key==="books"){
+              const records=Array.isArray(data)?data:Array.isArray(data?.books)?data.books:null;
+              if(!records)return "unverified_books_schema";
+              if(records.some(row=>row&&typeof row==="object"&&
+                  Object.hasOwn(row,"publication_status")&&row.publication_status!=="published"))
+                return "SUSPECTED_EDITORIAL_DATA";
+              return "books_index_public_or_undetermined";
+            }
+            if(key==="settings"){
+              if(!data||typeof data!=="object")return "unverified_settings_schema";
+              if(Object.keys(data).some(isSecretKey))
+                return "SUSPECTED_SECRET_KEY_FIELD";
+              return "cms_settings_served_review";
+            }
+            return "unverified_unexpected";
+          }
+          const first=await apiPage(1);
+          const expected={pages:first.result_info.total_pages,total:first.result_info.total_count};
+          if(!Number.isSafeInteger(expected.pages)||expected.pages<1||expected.pages>100||
+             !Number.isSafeInteger(expected.total))throw Error("Invalid pagination limits");
+          const seen=new Set(),targets=[];let missingOrigin=0;
+          for(let page=1;page<=expected.pages;page++){
+            const j=page===1?first:await apiPage(page),info=j.result_info;
+            if(info.page!==page||info.total_pages!==expected.pages||
+               info.total_count!==expected.total||info.per_page!==limit)
+              throw Error("Cloudflare inventory drift or incomplete pagination");
+            for(const row of j.result){
+              if(!row||!row.id||seen.has(row.id))throw Error("Duplicate or invalid deployment");
+              seen.add(row.id);
+              if(row.build_config?.destination_dir===""){
+                const origin=safeOrigin(row.url);
+                if(origin)targets.push(origin);
+                else missingOrigin++;
+              }
+            }
+          }
+          if(seen.size!==expected.total)throw Error("Inventory count does not match expected total");
+          const unique=[...new Set(targets)];
+          if(unique.length!==targets.length)throw Error("Repeated root-build deployment origin");
+          let suspected=0,unverified=0;
+          for(const origin of unique){
+            const home=await pathGet(origin,"/");
+            for(const [key,path] of cases){
+              const x=await pathGet(origin,path);
+              const result=classify(key,x,home);
+              bucket(key,result);
+              if(result.startsWith("SUSPECTED_"))suspected++;
+              if(result.startsWith("unverified_"))unverified++;
+            }
+          }
+          const report={
+            scope:"aljamharah preview historical deployments with empty destination_dir",
+            method:"Cloudflare metadata GET + bounded HTTPS GET; no POST/PATCH/DELETE",
+            deployment_total:seen.size,root_build_deployments:targets.length,
+            missing_origin:missingOrigin,paths_per_origin:cases.length,
+            routes_examined:unique.length*cases.length,
+            result_by_path:counts,suspected_route_exposures:suspected,
+            unverified_route_responses:unverified,
+            deletion_approved:false,
+            complete_security_clearance:false
+          };
+          console.log(JSON.stringify(report,null,2));
+          console.log("Only aggregate categories printed. No origin, URL, UUID, content, raw hash, token, unpublished poem or model call is logged.");
+          if(suspected||unverified||missingOrigin)process.exitCode=1;
+          NODE
