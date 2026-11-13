@@ -1,0 +1,61 @@
+name: Production post-merge poet/library CLS and responsive smoke
+on:
+  push:
+    branches: [ci/nov13-current-production-cls-20261113]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright
+      - name: GET-only canonical Production Chrome layout and rate-limit safety
+        run: |
+          node --input-type=module <<'NODE'
+          import {chromium} from 'playwright';
+          import assert from 'node:assert/strict';
+          const root='https://aljamharah.pages.dev';
+          let browser;
+          try{browser=await chromium.launch({channel:'chrome',headless:true,args:['--no-sandbox']})}
+          catch{browser=await chromium.launch({headless:true,args:['--no-sandbox']})}
+          const results=[];
+          try{
+            for(const width of [320,390,600,768,1280])for(const path of ['/library.html','/poets.html']){
+              const context=await browser.newContext({viewport:{width,height:844},locale:'ar',reducedMotion:'reduce',colorScheme:'dark'});
+              await context.route('**/*',r=>r.request().method()==='GET'?r.continue():r.abort());
+              const page=await context.newPage(),errors=[];
+              page.on('pageerror',e=>errors.push(e.message));
+              await page.addInitScript(()=>{
+                window.__layout={cls:0,shifts:0};
+                new PerformanceObserver(list=>{for(const e of list.getEntries())if(!e.hadRecentInput){window.__layout.cls+=e.value;window.__layout.shifts++}}).observe({type:'layout-shift',buffered:true});
+              });
+              const response=await page.goto(root+path,{waitUntil:'load',timeout:60000});
+              await page.waitForTimeout(900);
+              const x=await page.evaluate(path=>({
+                cls:+window.__layout.cls.toFixed(4),shifts:window.__layout.shifts,
+                cards:path.includes('library')?document.querySelectorAll('#categories .category').length:document.querySelectorAll('#cards .card').length,
+                overflow:Math.max(0,document.documentElement.scrollWidth-innerWidth),
+                fontStatus:document.fonts.status
+              }),path);
+              const record={path,width,status:response.status(),...x,errors:errors.length};
+              console.log('PRODUCTION_CLS '+JSON.stringify(record));
+              results.push(record);
+              assert.equal(record.status,200);
+              assert.equal(record.cards,path.includes('library')?6:11);
+              assert.equal(record.overflow,0);
+              assert.equal(record.errors,0);
+              await context.close();
+            }
+            const low=results.filter(r=>r.width===390);
+            console.log('PRODUCTION_CLS_SUMMARY widths='+[...new Set(results.map(r=>r.width))].join(',')+
+             ' page_checks='+results.length+' at390='+JSON.stringify(low.map(r=>({page:r.path,cls:r.cls})))+
+             ' GET-only=yes no_model_calls=yes');
+          }finally{await browser.close()}
+          NODE
