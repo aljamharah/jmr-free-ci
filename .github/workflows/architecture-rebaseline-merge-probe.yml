@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: f7df7a71e85e6236b49df94eee96fafdbbae2b0e
+          ref: ad3478681e1a9790bc5147577c7bcb9bf812d6cc
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: baseline
@@ -41,7 +41,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 847cae1968abb9fd1684fcae3cf1f2fe6f9d24ac
+          ref: a3598ff699c32b67bb7c8b3d5ae1e48f6534c2dd
           fetch-depth: 0
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
@@ -51,23 +51,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C baseline rev-parse HEAD)" = "f7df7a71e85e6236b49df94eee96fafdbbae2b0e"
-          test "$(git -C candidate rev-parse HEAD)" = "847cae1968abb9fd1684fcae3cf1f2fe6f9d24ac"
-          git -C candidate cat-file -e f7df7a71e85e6236b49df94eee96fafdbbae2b0e^{commit}
+          test "$(git -C baseline rev-parse HEAD)" = "ad3478681e1a9790bc5147577c7bcb9bf812d6cc"
+          test "$(git -C candidate rev-parse HEAD)" = "a3598ff699c32b67bb7c8b3d5ae1e48f6534c2dd"
+          git -C candidate cat-file -e ad3478681e1a9790bc5147577c7bcb9bf812d6cc^{commit}
           echo "Pinned commits exist. No GitHub branch will be modified."
 
       - name: Produce ephemeral local merge; never push any commit
         shell: bash
         run: |
           set -euo pipefail
-          git -C candidate -c user.name='Read-only CI Probe' -c user.email='ci@invalid.example' merge --no-ff --no-edit f7df7a71e85e6236b49df94eee96fafdbbae2b0e
+          git -C candidate -c user.name='Read-only CI Probe' -c user.email='ci@invalid.example' merge --no-ff --no-edit ad3478681e1a9790bc5147577c7bcb9bf812d6cc
           echo "Created a merge commit only in this disposable runner checkout. No push is configured."
 
       - name: Ensure virtual merge adds only the ten PR84 docs/tools/tests
         shell: bash
         run: |
           set -euo pipefail
-          git -C candidate diff --name-status f7df7a71e85e6236b49df94eee96fafdbbae2b0e HEAD > /tmp/architecture-changed-files.txt
+          git -C candidate diff --name-status ad3478681e1a9790bc5147577c7bcb9bf812d6cc HEAD > /tmp/architecture-changed-files.txt
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import {readFileSync} from 'node:fs';
