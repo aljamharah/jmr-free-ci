@@ -1,0 +1,40 @@
+name: One safe curated JMR production request
+on:
+  push:
+    branches: [ci/production-curated-jmr-2026-11-13]
+permissions:
+  contents: read
+jobs:
+  reviewed-quran:
+    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/ci/production-curated-jmr-2026-11-13'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Single reviewed Quran answer; assert no generated inference
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          const endpoint="https://aljamharah.pages.dev/api/jmr";
+          const response=await fetch(endpoint,{
+            method:"POST",
+            headers:{"content-type":"application/json","accept":"application/json"},
+            body:JSON.stringify({message:"إنما يخشى الله من عباده العلماء",conversation:[]}),
+            signal:AbortSignal.timeout(25000)
+          });
+          let payload;
+          try{payload=await response.json()}
+          catch{throw Error("JMR returned invalid JSON: HTTP "+response.status)}
+          if(response.status!==200){
+            throw Error("JMR live POST HTTP "+response.status+" stage="+
+              String(response.headers.get("x-jmr-rate-limit-stage"))+
+              " error="+String(payload?.error||"unknown").slice(0,200));
+          }
+          assert.equal(payload.mode,"curated_exact_answer","Exact reviewed path must be used instead of AI inference");
+          assert.equal(payload.answer_kind,"quranic_verse");
+          assert.equal(payload.quran_verification?.status,"verified");
+          assert.ok(payload.answer.includes("سورة فاطر، الآية 28"));
+          assert.ok(payload.answer.includes("ليست بيتاً شعرياً"));
+          assert.ok((payload.poet_matches||[]).length===0);
+          assert.equal(response.headers.get("x-jmr-revision"),"jmr-retrieval-2026-11-12-dedup-r1");
+          console.log("JMR_PRODUCTION_POST PASS status=200 mode=curated_exact_answer verse=35:28 verified=yes poet_matches=0 AI_inferences=0 requests=1");
+          NODE
