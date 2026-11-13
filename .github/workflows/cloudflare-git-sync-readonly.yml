@@ -4,7 +4,7 @@ name: Verify Cloudflare production matches GitHub main (GET only)
 on:
   push:
     branches:
-      - ci/cloudflare-git-sync-readonly-2026-11-12
+      - main
     paths:
       - scripts/production_git_sync_audit.mjs
       - tests/production-git-sync-audit.test.mjs
