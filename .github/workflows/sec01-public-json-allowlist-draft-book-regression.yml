@@ -1,4 +1,4 @@
-name: SEC01 exact SHA JSON export plus book-field and rights-gate full parity
+name: SEC01 PR104 exact SHA latest-main virtual merge and rights gate
 
 on:
   push:
@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: aad574cfa0e399f6aeffdd4c8b8cea2648652269
+          ref: f931fbe536229517232d6eb1f3bc4cb498c9f4d5
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: before
@@ -35,10 +35,34 @@ jobs:
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: after
+          fetch-depth: 0
       - name: Require exact immutable SHAs
         run: |
-          test "$(git -C before rev-parse HEAD)" = "aad574cfa0e399f6aeffdd4c8b8cea2648652269"
+          test "$(git -C before rev-parse HEAD)" = "f931fbe536229517232d6eb1f3bc4cb498c9f4d5"
           test "$(git -C after rev-parse HEAD)" = "25367bf11efb0d325d362dbca4a71a5bc02e75c7"
+      - name: Create disposable local merge only, verify narrow changed-file scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C after cat-file -e f931fbe536229517232d6eb1f3bc4cb498c9f4d5^{commit}
+          git -C after -c user.name='Read-only Security Review' \
+            -c user.email='review@invalid.example' \
+            merge --no-ff --no-edit f931fbe536229517232d6eb1f3bc4cb498c9f4d5 >/dev/null
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {execFileSync} from 'node:child_process';
+          const lines=execFileSync('git',['-C','after','diff','--name-status',
+            'f931fbe536229517232d6eb1f3bc4cb498c9f4d5','HEAD'],{encoding:'utf8'}).trim().split('\n')
+            .filter(Boolean).map(s=>s.replace('\t',' ')).sort();
+          const expected=[
+            'M scripts/build_public_site.mjs',
+            'A scripts/security/public-content-export-policy.mjs',
+            'M scripts/test_public_site_build.mjs',
+            'A tests/public-content-export-policy.test.mjs'
+          ].sort();
+          assert.deepEqual(lines,expected,'Virtual merge changed an unapproved path');
+          console.log('Virtual merge: precisely four public-export code/test paths; no other edits.');
+          NODE
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -82,8 +106,8 @@ jobs:
             candidate_ok:process.env.AFTER==='0'}));
           assert.equal(process.env.BEFORE,'0');
           assert.equal(process.env.AFTER,'0');
-          assert.equal(a.tests,189,'Baseline test discovery unexpectedly changed');
-          assert.equal(b.tests,197,'Eight policy tests must be present and no tests lost');
+          assert.ok(a.tests>=189,'Baseline test suite unexpectedly shrank');
+          assert.equal(b.tests,a.tests+8,'Eight added policy tests required; no tests lost');
           assert.equal(a.tests,a.pass);
           assert.equal(b.tests,b.pass);
           assert.equal(a.fail+b.fail,0);
