@@ -1,0 +1,72 @@
+name: SEC01 current Pages production source-route protection (GET only)
+
+on:
+  push:
+    branches:
+      - ci/sec01-production-source-path-check-20261113
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Inspect production and staging published source paths without content logs
+        run: |
+          node --input-type=module <<'NODE'
+          const origins=[
+            ['aljamharah','https://aljamharah.pages.dev'],
+            ['aljamharah-staging','https://aljamharah-staging.pages.dev']
+          ];
+          const files=[
+            ['github','/.github/workflows/validate-library.yml'],
+            ['database','/database/schema.sql']
+          ];
+          async function read(url){
+            try{
+              const r=await fetch(url,{method:'GET',redirect:'manual',signal:AbortSignal.timeout(15000)});
+              if(r.status===403||r.status===404)return {kind:'blocked'};
+              if(r.status!==200)return {kind:'unverified_status'};
+              const mime=(r.headers.get('content-type')||'').split(';',1)[0].toLowerCase();
+              if(Number(r.headers.get('content-length')||0)>131072)return {kind:'unverified_size'};
+              const reader=r.body?.getReader();
+              if(!reader)return {kind:'unverified_body'};
+              let bytes=0;const buffers=[];
+              try{
+                while(true){
+                  const v=await reader.read();if(v.done)break;
+                  bytes+=v.value.byteLength;
+                  if(bytes>131072){await reader.cancel();return {kind:'unverified_size'}}
+                  buffers.push(Buffer.from(v.value));
+                }
+              }catch{return {kind:'unverified_network'}}
+              return {kind:'body',data:Buffer.concat(buffers).toString('utf8'),mime};
+            }catch{return {kind:'unverified_network'}}
+          }
+          const report={};let critical=0,unverified=0;
+          for(const [name,origin] of origins){
+            const home=await read(origin+'/');
+            const counts={};
+            for(const [key,path] of files){
+              const r=await read(origin+path);let kind=r.kind;
+              if(r.kind==='body'){
+                const signature=key==='github'
+                  ? /^jobs:\s*$/m.test(r.data)&&/^name:\s*\S/m.test(r.data)&&/\buses:\s*actions\//m.test(r.data)
+                  : /CREATE\s+TABLE\b/i.test(r.data)&&/CREATE\s+(?:UNIQUE\s+)?INDEX\b/i.test(r.data);
+                if(signature)kind='CRITICAL_SOURCE_EXPOSED';
+                else if(r.mime==='text/html'&&home.kind==='body'&&home.data===r.data)kind='public_home_html_fallback';
+                else kind='unverified_other_body';
+              }
+              counts[key]=kind;
+              if(kind==='CRITICAL_SOURCE_EXPOSED')critical++;
+              else if(kind.startsWith('unverified_'))unverified++;
+            }
+            report[name]=counts;
+          }
+          console.log(JSON.stringify({mode:'GET-only-current-production-route-audit',results:report,
+            critical,unverified,content_logged:false,paid_model_calls:0,deletion_approved:false},null,2));
+          if(critical||unverified)process.exitCode=1;
+          NODE
