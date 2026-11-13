@@ -1,0 +1,144 @@
+name: SEC01 PR104 exact new-main virtual merge, public dist parity and synthetic draft guards
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sec01-pr104-post-do-post-architecture-main-merge-gate.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-pr104-current-main-virtual-merge
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact reviewed main baseline
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 9ad44cc03b9f208404c95666bd0d4e83c4e29674
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+      - name: Checkout exact PR104 candidate with full history
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 25367bf11efb0d325d362dbca4a71a5bc02e75c7
+          fetch-depth: 0
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+      - name: Create disposable local merge and inspect exact allowed source diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "9ad44cc03b9f208404c95666bd0d4e83c4e29674"
+          test "$(git -C candidate rev-parse HEAD)" = "25367bf11efb0d325d362dbca4a71a5bc02e75c7"
+          git -C candidate fetch --no-tags ../baseline 9ad44cc03b9f208404c95666bd0d4e83c4e29674
+          git -C candidate -c user.name='Read-only Security Validation' \
+            -c user.email='security-test@invalid.example' merge --no-ff --no-edit 9ad44cc03b9f208404c95666bd0d4e83c4e29674 > /dev/null
+          git -C candidate diff --name-status --no-renames 9ad44cc03b9f208404c95666bd0d4e83c4e29674 HEAD > /tmp/sec01-104-files.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const got=readFileSync('/tmp/sec01-104-files.txt','utf8').trim().split('\n').sort();
+          const expected=[
+            'M\tscripts/build_public_site.mjs',
+            'M\tscripts/test_public_site_build.mjs',
+            'A\tscripts/security/public-content-export-policy.mjs',
+            'A\ttests/public-content-export-policy.test.mjs'
+          ].sort();
+          assert.deepEqual(got,expected,'PR104 virtual merge changed unintended paths');
+          console.log('Exact-four-file PR104 change on latest main; no runtime API or Pages config modifications.');
+          NODE
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install free source-check dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Simulate future private draft and unknown source JSON (isolated, never committed)
+        working-directory: candidate
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {writeFileSync,rmSync,existsSync,mkdirSync} from 'node:fs';
+          import {spawnSync} from 'node:child_process';
+          const draft='content/books/records/sec01-ci-draft.json';
+          const unknown='content/settings/sec01-ci-unknown.json';
+          const build=()=>spawnSync(process.execPath,['scripts/build_public_site.mjs'],{encoding:'utf8'});
+          assert.equal(existsSync(draft),false);
+          assert.equal(existsSync(unknown),false);
+          mkdirSync('content/books/records',{recursive:true});
+          try{
+            writeFileSync(draft,JSON.stringify({id:'sec01-ci-draft',title:'Synthetic draft',publication_status:'draft'}));
+            let r=build();
+            assert.equal(r.status,0,'Legitimate source-only book draft caused public build failure');
+            assert.equal(existsSync('dist/'+draft),false,'Source-only book draft escaped into public dist');
+            writeFileSync(unknown,JSON.stringify({audit:'synthetic',public:false}));
+            r=build();
+            assert.notEqual(r.status,0,'Unknown internal JSON did not fail closed');
+            console.log('PASS: synthetic private book draft excluded; unknown source JSON fails public build.');
+          }finally{
+            rmSync(draft,{force:true});
+            rmSync(unknown,{force:true});
+          }
+          NODE
+      - name: Independently build two sanitized trees and assert equal output
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/validation/compare-public-dist.mjs \
+            ../baseline/build-reports/dist-inventory.json build-reports/dist-inventory.json)
+      - name: Run both full Node test suites after generated index build
+        shell: bash
+        run: |
+          set +e
+          (cd baseline && node --test > ../sec01-base.tap 2>&1)
+          a=$?
+          (cd candidate && node --test > ../sec01-candidate.tap 2>&1)
+          b=$?
+          set -e
+          BASE="$a" CAND="$b" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          function score(path){
+            const t=readFileSync(path,'utf8');
+            const n=key=>Number(t.match(new RegExp('^# '+key+' (\\d+)$','m'))?.[1]??-1);
+            return {tests:n('tests'),pass:n('pass'),fail:n('fail')};
+          }
+          const before=score('sec01-base.tap'),after=score('sec01-candidate.tap');
+          console.log(JSON.stringify({before,after,base_exit:process.env.BASE,candidate_exit:process.env.CAND}));
+          assert.equal(process.env.BASE,'0');
+          assert.equal(process.env.CAND,'0');
+          assert.ok(before.tests>=193,'Main baseline test discovery unexpectedly shrank');
+          assert.equal(after.tests,before.tests+8,'Exactly eight new SEC01 tests expected');
+          assert.equal(before.tests,before.pass);
+          assert.equal(after.tests,after.pass);
+          assert.equal(before.fail+after.fail,0);
+          NODE
+      - name: Full foundation, Python validators and policy unit checks
+        working-directory: candidate
+        run: |
+          node --test tests/public-content-export-policy.test.mjs
+          node scripts/check_site_foundation.mjs
+          python scripts/validate_library.py
+          python -m unittest discover -s tests -p 'test_*.py'
+      - name: Preserve original tracked Git source
+        run: |
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          test -z "$(git -C candidate ls-files --others --exclude-standard)"
+          echo 'SEC01 PR104 exact SHA virtual merge PASS: 874 public files unchanged, drafts source-only, no AI or Cloudflare writes.'
