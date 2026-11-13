@@ -1,0 +1,55 @@
+name: JMR Preview concurrent DO limiter (malformed requests, no model)
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/jmr-preview-concurrent-do-guard.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  concurrent-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Verify concurrent 12-per-minute limit with malformed JSON only
+        run: |
+          node --input-type=module <<'NODE'
+          const origin = "https://3a239e79.aljamharah.pages.dev";
+          if (!/^https:\/\/[a-f0-9]{8}\.aljamharah\.pages\.dev$/.test(origin)) {
+            throw Error("Preview origin must be pinned and safe");
+          }
+          const currentMinuteMs=Date.now()%60000;
+          // Avoid a test spanning two minute buckets.
+          if(currentMinuteMs>40000) {
+            await new Promise(resolve=>setTimeout(resolve,60000-currentMinuteMs+2500));
+          }
+          const start=Date.now();
+          const requests=Array.from({length:15},(_,i)=>
+            fetch(origin+"/api/jmr",{
+              method:"POST",headers:{"Content-Type":"application/json"},
+              body:"{",redirect:"error",signal:AbortSignal.timeout(18000)
+            }).then(r=>({i,status:r.status,stage:r.headers.get("X-JMR-Rate-Limit-Stage")}))
+          );
+          const responses=await Promise.all(requests);
+          const allowed=responses.filter(r=>r.status===400);
+          const limited=responses.filter(r=>r.status===429);
+          const other=responses.filter(r=>![400,429].includes(r.status));
+          const strict=other.length===0 && allowed.length<=12 && limited.length>=3 &&
+            limited.every(r=>r.stage==="limit") && Date.now()-start<35000;
+          const report={
+            requested:responses.length, allowed_invalid_json:allowed.length,
+            throttled:limited.length, unexpected_statuses:other.map(r=>r.status),
+            elapsed_ms:Date.now()-start, within_one_minute:true,
+            correct_stage_header:limited.every(r=>r.stage==="limit"),
+            strict_12_per_minute:strict,
+            ai_model_requests:0
+          };
+          console.log("JMR_DO_CONCURRENCY "+JSON.stringify(report));
+          const {appendFileSync}=await import("node:fs");
+          if(process.env.GITHUB_STEP_SUMMARY)appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            "Preview DO concurrent malformed request check: "+(strict?"PASS":"FAIL")+
+            " (allowed "+allowed.length+", limited "+limited.length+", other "+other.length+"). "+
+            "Never sends a valid model message.\n");
+          if(!strict)process.exitCode=1;
+          NODE
