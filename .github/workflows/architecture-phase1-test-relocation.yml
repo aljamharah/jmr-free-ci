@@ -1,0 +1,116 @@
+name: Architecture phase 1 isolated relocation and strict dist parity
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/architecture-phase1-test-relocation.yml"
+permissions:
+  contents: read
+concurrency:
+  group: architecture-phase1-single-relocation
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require existing read-only private source token
+        env:
+          SOURCE_READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          if [ -z "$SOURCE_READ_TOKEN" ]; then echo "::error::Read-only private checkout token missing"; exit 1; fi
+      - name: Checkout exact baseline in isolated folder
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 632f5b89a46e279546a59e0870e2543fd794d4fb
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: baseline
+          persist-credentials: false
+      - name: Checkout exact one-file relocation candidate in isolated folder
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 98107df2af776aa05c199059b26565696a2c7b42
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate pinned SHA and exactly one test relocation and two doc edits
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "632f5b89a46e279546a59e0870e2543fd794d4fb"
+          test "$(git -C candidate rev-parse HEAD)" = "98107df2af776aa05c199059b26565696a2c7b42"
+          git -C candidate diff --name-status --no-renames 632f5b89a46e279546a59e0870e2543fd794d4fb HEAD > /tmp/phase1-changed.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const actual=readFileSync('/tmp/phase1-changed.txt','utf8').trim().split('\n').sort();
+          const expected=[
+            'A\ttests/architecture/compare-public-dist.test.mjs',
+            'D\ttests/compare-public-dist.test.mjs',
+            'M\tdocs/architecture/DIST-PARITY-GATE-2026-11-13-AR.md',
+            'M\tdocs/architecture/HANDOFF-2026-11-13-AR.md'
+          ].sort();
+          assert.deepEqual(actual,expected);
+          console.log('Verified a single test relocation, two documentation path fixes, no application changes.');
+          NODE
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only local open-source validation dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Run explicit moved-test suite
+        working-directory: candidate
+        run: node --test tests/architecture/compare-public-dist.test.mjs
+      - name: Compare complete baseline and candidate Node test discovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && node --test > ../baseline-node.tap)
+          (cd candidate && node --test > ../candidate-node.tap)
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          function report(name) {
+            const t=readFileSync(name,'utf8');
+            const get=(key)=>{const m=t.match(new RegExp('^# '+key+' (\\d+)$','m'));assert.ok(m, 'missing '+key+' in '+name);return Number(m[1]);};
+            return {tests:get('tests'),pass:get('pass'),fail:get('fail'),cancelled:get('cancelled')};
+          }
+          const a=report('baseline-node.tap'),b=report('candidate-node.tap');
+          assert.deepEqual(a,b,'Moving the test changed Node test coverage');
+          assert.equal(a.tests,a.pass);
+          assert.equal(a.fail,0);
+          console.log(JSON.stringify({testCounts:a,identical:true}));
+          NODE
+      - name: Run full technical foundation regression
+        working-directory: candidate
+        run: node scripts/check_site_foundation.mjs
+      - name: Run Python source validators without publishing
+        working-directory: candidate
+        run: |
+          python scripts/validate_library.py
+          python -m unittest discover -s tests -p 'test_*.py'
+      - name: Build two independent sanitized static dist trees
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+      - name: Require identical public paths bytes and SHA256
+        working-directory: candidate
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../baseline/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json
+      - name: Require no tracked source modification
+        shell: bash
+        run: |
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          echo 'Source clean. No Git push, Cloudflare write, model request, or public artifact upload.'
