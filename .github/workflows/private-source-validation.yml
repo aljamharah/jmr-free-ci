@@ -49,7 +49,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 509df63981b31f04e7323cfeeb1beb7ed5c803e8
+          ref: a547c20b1085a652ec3cfed2384b57f38c8c979f
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: private-source
           fetch-depth: 80
@@ -58,7 +58,7 @@ jobs:
       - name: Confirm exact private branch revision
         working-directory: private-source
         run: |
-          test "$(git rev-parse HEAD)" = "509df63981b31f04e7323cfeeb1beb7ed5c803e8"
+          test "$(git rev-parse HEAD)" = "a547c20b1085a652ec3cfed2384b57f38c8c979f"
 
       - name: Check out fixed main revision separately (read-only)
         uses: actions/checkout@v4
@@ -74,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C canonical-main rev-parse HEAD)" = "ce8e7c00263c1a695759266d0d70453b302cf85d"
-          test "$(git -C private-source rev-parse HEAD)" = "509df63981b31f04e7323cfeeb1beb7ed5c803e8"
+          test "$(git -C private-source rev-parse HEAD)" = "a547c20b1085a652ec3cfed2384b57f38c8c979f"
           git -C private-source fetch --no-tags ../canonical-main HEAD:refs/remotes/integration/main
           test "$(git -C private-source rev-parse refs/remotes/integration/main)" = "ce8e7c00263c1a695759266d0d70453b302cf85d"
           base="$(git -C private-source merge-base HEAD refs/remotes/integration/main)"
@@ -181,12 +181,12 @@ jobs:
 
       - name: Verify PR81 deployment Cloudflare Preview (GET only, no AI usage)
         env:
-          JMR_PREVIEW_ORIGIN: https://d4a23566.aljamharah.pages.dev
+          JMR_PREVIEW_ORIGIN: https://02cbfe8d.aljamharah.pages.dev
         run: |
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
           const origin = process.env.JMR_PREVIEW_ORIGIN;
-          if (new URL(origin).hostname !== "d4a23566.aljamharah.pages.dev") throw new Error("Unexpected Preview origin");
+          if (new URL(origin).hostname !== "02cbfe8d.aljamharah.pages.dev") throw new Error("Unexpected Preview origin");
           const routes = [
             ["/",200],["/sitemap.xml",200],["/robots.txt",200],
             ["/search.html",200],["/jmr.html",200],["/assets/jmr-fidelity.css",200],["/content/poems.json",200],
