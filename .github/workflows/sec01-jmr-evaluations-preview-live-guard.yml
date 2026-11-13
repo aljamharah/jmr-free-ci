@@ -1,0 +1,104 @@
+name: SEC01 source-only JMR evaluation file withheld in exact live Preview (GET only)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sec01-jmr-evaluations-preview-live-guard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify source-only corpus is inaccessible and published knowledge is intact
+        env:
+          CF_ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CF_TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const target='905223b9e9ee3f8f005b4a07281790132e242a41',account=process.env.CF_ACCOUNT,token=process.env.CF_TOKEN;
+          if(!/^[a-f0-9]{32}$/i.test(account||'')||!token||token.length<12)throw Error('Missing existing read-only credential');
+          const names=['aljamharah','aljamharah-staging'];
+          async function getDeployments(project){
+            const uri='https://api.cloudflare.com/client/v4/accounts/'+account+'/pages/projects/'+project+'/deployments?env=preview&per_page=25&page=1';
+            const r=await fetch(uri,{method:'GET',redirect:'error',headers:{Authorization:'Bearer '+token,Accept:'application/json'},signal:AbortSignal.timeout(16000)});
+            if(!r.ok)throw Error('Could not list preview deployments: HTTP '+r.status);
+            const j=await r.json();
+            if(j.success!==true||!Array.isArray(j.result))throw Error('Invalid Preview API response');
+            return j.result;
+          }
+          function validOrigin(url,project){
+            if(typeof url!=='string')return null;
+            try{
+              const u=new URL(url),root=project+'.pages.dev';
+              if(u.protocol!=='https:'||u.port||u.username||u.password||u.pathname!=='/'||u.search||u.hash||
+                !u.hostname.endsWith('.'+root))return null;
+              const prefix=u.hostname.slice(0,-(root.length+1));
+              if(!/^[a-z0-9][a-z0-9-]{0,62}$/.test(prefix))return null;
+              return u.origin;
+            }catch{return null;}
+          }
+          async function request(origin,path){
+            return fetch(origin+path,{method:'GET',redirect:'manual',
+              headers:{Accept:'application/json'},signal:AbortSignal.timeout(14000)});
+          }
+          async function boundedBody(r,max=786432){
+            if(Number(r.headers.get('content-length')||0)>max)throw Error('Size exceeds safe reading cap');
+            const reader=r.body?.getReader();if(!reader)throw Error('Missing body stream');
+            let total=0;const parts=[];
+            for(;;){const x=await reader.read();if(x.done)break;
+              total+=x.value.byteLength;
+              if(total>max){await reader.cancel();throw Error('Stream exceeds safe reading cap');}
+              parts.push(Buffer.from(x.value));
+            }
+            return Buffer.concat(parts).toString('utf8');
+          }
+          const summary={evaluations_withheld:0,knowledge_json_available:0,poems_public_json_available:0,privacy_page_available:0};
+          for(const project of names){
+            const deployments=await getDeployments(project);
+            const matches=deployments.filter(x=>x.deployment_trigger?.metadata?.commit_hash===target&&
+              x.latest_stage?.status==='success');
+            if(matches.length!==1)throw Error('No uniquely verified successful exact-SHA Preview for '+project);
+            const origin=validOrigin(matches[0].url,project);
+            if(!origin)throw Error('Unverified Preview host');
+            const r=await request(origin,'/content/jmr/knowledge/evaluations.json');
+            if(r.status===403||r.status===404)summary.evaluations_withheld++;
+            else if(r.status===200&&((r.headers.get('content-type')||'').split(';')[0].toLowerCase().trim()==='text/html')){
+              const [candidate,home]=await Promise.all([boundedBody(r),request(origin,'/').then(async x=>{
+                if(x.status!==200)throw Error('Homepage comparison unavailable');
+                return boundedBody(x);
+              })]);
+              if(candidate!==home)throw Error('Withheld route did not match public homepage fallback');
+              summary.evaluations_withheld++;
+            }else throw Error('Internal quality evaluation corpus still appears reachable via public Preview');
+            const publicKnowledge=await request(origin,'/content/jmr/knowledge/index.json');
+            if(publicKnowledge.status!==200||!(publicKnowledge.headers.get('content-type')||'').includes('json'))
+              throw Error('Public knowledge index no longer available');
+            const knowledge=JSON.parse(await boundedBody(publicKnowledge,500000));
+            if(!Array.isArray(knowledge.entries)||knowledge.entries.length===0)
+              throw Error('Public knowledge index response shape changed');
+            summary.knowledge_json_available++;
+            const poems=await request(origin,'/content/poems.json');
+            if(poems.status!==200||!(poems.headers.get('content-type')||'').includes('json'))
+              throw Error('Sanitized public poems endpoint unavailable');
+            const poemsData=JSON.parse(await boundedBody(poems));
+            if(!Array.isArray(poemsData.poems)||poemsData.poems.some(p=>p.publication_status!=='published'))
+              throw Error('Public poems changed or included unpublished records');
+            summary.poems_public_json_available++;
+            const privacy=await request(origin,'/privacy.html');
+            if(privacy.status!==200)throw Error('Privacy notice not available in candidate Preview');
+            summary.privacy_page_available++;
+          }
+          console.log(JSON.stringify({scope:'exact-candidate-preview-only',GET_only:true,
+            checked_projects:2,summary,retained_source:true,other_deployments_unchanged:true,
+            historical_risk_closed:false,resource_delete_approval:false,raw_response_bodies_logged:false}));
+          if(Object.values(summary).some(n=>n!==2))throw Error('Incomplete Preview security acceptance');
+          NODE
