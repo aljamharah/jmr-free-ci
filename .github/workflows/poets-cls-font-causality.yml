@@ -1,0 +1,65 @@
+name: Diagnose poet CLS fonts versus dynamic content (GET only)
+on:
+  push:
+    branches: [ci/poets-cls-font-causality-20261113]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright
+      - name: Read-only comparative CLS causality at 390px
+        run: |
+          node --input-type=module <<'NODE'
+          import {chromium} from 'playwright';
+          let browser;
+          try { browser=await chromium.launch({channel:'chrome',headless:true,args:['--no-sandbox']});}
+          catch {browser=await chromium.launch({headless:true,args:['--no-sandbox']});}
+          const origin='https://aljamharah.pages.dev/poets.html';
+          try{
+            for(const mode of ['cold','fonts-blocked','warm-fonts']){
+              const context=await browser.newContext({viewport:{width:390,height:844},locale:'ar',reducedMotion:'reduce'});
+              await context.route('**/*',r=>{
+                if(r.request().method()!=='GET')return r.abort();
+                if(mode==='fonts-blocked'&&/fonts\.(googleapis|gstatic)\.com/.test(r.request().url()))return r.abort();
+                return r.continue();
+              });
+              async function visit(label){
+                const page=await context.newPage();
+                await page.addInitScript(()=>{
+                  window.__cls=[];
+                  new PerformanceObserver(list=>{for(const e of list.getEntries())if(!e.hadRecentInput){
+                    const x={val:e.value,t:e.startTime,ready:document.readyState,fontStatus:document.fonts?.status||'none',
+                     targets:(e.sources||[]).slice(0,3).map(s=>s.node?.id||s.node?.className||s.node?.tagName||'?')};
+                    window.__cls.push(x);
+                  }}).observe({type:'layout-shift',buffered:true});
+                });
+                const response=await page.goto(origin,{waitUntil:'load',timeout:50000});
+                await page.waitForTimeout(1500);
+                const data=await page.evaluate(()=>({
+                  cls:+window.__cls.reduce((a,b)=>a+b.val,0).toFixed(4),
+                  shifts:window.__cls.slice(0,8),
+                  fontsStatus:document.fonts.status,
+                  introHeight:Math.round(document.querySelector('.intro')?.getBoundingClientRect().height||0),
+                  listingTop:Math.round(document.querySelector('#listing')?.getBoundingClientRect().top||0),
+                  cardCount:document.querySelectorAll('#cards .card').length,
+                  statusHidden:document.querySelector('#status')?.hidden,
+                  scrollWidth:document.documentElement.scrollWidth
+                }));
+                console.log('POET_CLS '+JSON.stringify({label,http:response.status(),...data}));
+                await page.close();
+              }
+              await visit(mode+'-1');
+              if(mode==='warm-fonts')await visit(mode+'-2');
+              await context.close();
+            }
+          }finally{await browser.close()}
+          NODE
