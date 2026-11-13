@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 18ea7c63b03c1dcfc38eee4abdae6da12b573652
+          ref: 92986a608ef45785f16674357a7007aee5521728
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: after
@@ -39,7 +39,7 @@ jobs:
       - name: Pin repository revisions
         run: |
           test "$(git -C before rev-parse HEAD)" = "aad574cfa0e399f6aeffdd4c8b8cea2648652269"
-          test "$(git -C after rev-parse HEAD)" = "18ea7c63b03c1dcfc38eee4abdae6da12b573652"
+          test "$(git -C after rev-parse HEAD)" = "92986a608ef45785f16674357a7007aee5521728"
 
       - name: Run baseline build locally without publishing
         working-directory: before
