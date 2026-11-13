@@ -41,7 +41,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: e1a0095907a94ef19ae608b448b0ba6df19c1c63
+          ref: 0611b2da7a17eeac669b19923dd4fbd3b68a39d8
           fetch-depth: 0
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C baseline rev-parse HEAD)" = "3c8f99d46ee7cbd461a6f6da944d7089759f2e1c"
-          test "$(git -C candidate rev-parse HEAD)" = "e1a0095907a94ef19ae608b448b0ba6df19c1c63"
+          test "$(git -C candidate rev-parse HEAD)" = "0611b2da7a17eeac669b19923dd4fbd3b68a39d8"
           git -C candidate cat-file -e 3c8f99d46ee7cbd461a6f6da944d7089759f2e1c^{commit}
           git -C candidate -c user.name='Read-only SEC01 Merge Probe' \
             -c user.email='ci@invalid.example' \
