@@ -1,0 +1,56 @@
+name: Evening production CLS root cause check (GET-only)
+on:
+  push:
+    branches: [ci/nov13-evening-live-cls-readonly]
+permissions:
+  contents: read
+jobs:
+  cls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright
+      - name: Trace layout shifts without recording visitor data
+        run: |
+          node --input-type=module <<'NODE'
+          import {chromium} from "playwright";
+          let browser;
+          try{browser=await chromium.launch({channel:"chrome",headless:true,args:["--no-sandbox"]})}
+          catch{browser=await chromium.launch({headless:true,args:["--no-sandbox"]})}
+          try{
+           for(const origin of ["https://aljamharah.pages.dev"]){
+            for(const path of ["/library.html","/poets.html"]){
+             const context=await browser.newContext({viewport:{width:390,height:844},locale:"ar",reducedMotion:"reduce",colorScheme:"dark"});
+             await context.route("**/*",route=>route.request().method()==="GET"?route.continue():route.abort());
+             const page=await context.newPage();
+             await page.addInitScript(()=>{
+              window.__shiftRecords=[];
+              new PerformanceObserver(list=>{
+               for(const entry of list.getEntries()){
+                if(entry.hadRecentInput)continue;
+                window.__shiftRecords.push({value:Number(entry.value.toFixed(4)),at:Math.round(entry.startTime),
+                  sources:(entry.sources||[]).slice(0,5).map(src=>{
+                   const n=src.node;
+                   return {tag:n?.tagName||"",id:n?.id||"",cls:typeof n?.className==="string"?n.className.slice(0,90):"",
+                    prev:src.previousRect?.toJSON?.()||src.previousRect,
+                    cur:src.currentRect?.toJSON?.()||src.currentRect};
+                  })});
+               }
+              }).observe({type:"layout-shift",buffered:true});
+             });
+             await page.goto(origin+path,{waitUntil:"load",timeout:40000});
+             await page.waitForTimeout(1100);
+             const records=await page.evaluate(()=>window.__shiftRecords);
+             console.log("CLS_TRACE "+JSON.stringify({origin:"production",path,
+               total:Number(records.reduce((n,r)=>n+r.value,0).toFixed(4)),shifts:records.slice(0,10)}));
+             await context.close();
+            }
+           }
+          }finally{await browser.close()}
+          NODE
