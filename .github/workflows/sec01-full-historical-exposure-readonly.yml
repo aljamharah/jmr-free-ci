@@ -153,9 +153,13 @@ jobs:
             for(let page=1;page<=Math.max(total,1);page++){
               const data=page===1?first:await safeGet(pre+page);
               const info=data.result_info;
-              if(info.page!==page||info.total_pages!==total||info.total_count!==totalCount||
-                !Number.isSafeInteger(info.per_page)||info.per_page<1||info.per_page>25||
-                data.result.length>info.per_page)throw Error('Unstable or invalid page inventory');
+              const reasons=[];
+              if(info.page!==page)reasons.push('page_mismatch');
+              if(info.total_pages!==total)reasons.push('total_pages_moved');
+              if(info.total_count!==totalCount)reasons.push('total_count_moved');
+              if(!Number.isSafeInteger(info.per_page)||info.per_page<1||info.per_page>25)reasons.push('per_page_invalid');
+              if(data.result.length>info.per_page)reasons.push('oversized_result');
+              if(reasons.length)throw Error('Inventory needs rebaseline: '+key+' page='+page+' '+reasons.join(','));
               if(page<total&&data.result.length!==info.per_page)throw Error('Truncated non-final page');
               for(const dep of data.result){
                 if(!dep||typeof dep.id!=='string'||allIds.has(dep.id)||
