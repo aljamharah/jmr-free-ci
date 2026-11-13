@@ -2,7 +2,7 @@ name: Validate private JMR source
 
 on:
   push:
-    branches: [ci/integration-main-2026-11-13]
+    branches: [ci/pr81-verified-2026-11-13]
   workflow_dispatch:
     inputs:
       preview_url:
@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/ci/integration-main-2026-11-13'
+    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/ci/pr81-verified-2026-11-13'
     name: Validate canonical private repository
     runs-on: ubuntu-latest
     steps:
@@ -49,7 +49,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: a63a811880a94405260afa78cf76b31bae45ef17
+          ref: 509df63981b31f04e7323cfeeb1beb7ed5c803e8
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: private-source
           fetch-depth: 80
@@ -58,13 +58,13 @@ jobs:
       - name: Confirm exact private branch revision
         working-directory: private-source
         run: |
-          test "$(git rev-parse HEAD)" = "a63a811880a94405260afa78cf76b31bae45ef17"
+          test "$(git rev-parse HEAD)" = "509df63981b31f04e7323cfeeb1beb7ed5c803e8"
 
       - name: Check out fixed main revision separately (read-only)
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 0bb1d8cba3f474daad64d43f731919364a444746
+          ref: ce8e7c00263c1a695759266d0d70453b302cf85d
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: canonical-main
           fetch-depth: 80
@@ -73,10 +73,10 @@ jobs:
       - name: Dry merge into temporary CI checkout, never push
         run: |
           set -euo pipefail
-          test "$(git -C canonical-main rev-parse HEAD)" = "0bb1d8cba3f474daad64d43f731919364a444746"
-          test "$(git -C private-source rev-parse HEAD)" = "a63a811880a94405260afa78cf76b31bae45ef17"
+          test "$(git -C canonical-main rev-parse HEAD)" = "ce8e7c00263c1a695759266d0d70453b302cf85d"
+          test "$(git -C private-source rev-parse HEAD)" = "509df63981b31f04e7323cfeeb1beb7ed5c803e8"
           git -C private-source fetch --no-tags ../canonical-main HEAD:refs/remotes/integration/main
-          test "$(git -C private-source rev-parse refs/remotes/integration/main)" = "0bb1d8cba3f474daad64d43f731919364a444746"
+          test "$(git -C private-source rev-parse refs/remotes/integration/main)" = "ce8e7c00263c1a695759266d0d70453b302cf85d"
           base="$(git -C private-source merge-base HEAD refs/remotes/integration/main)"
           test -n "$base"
           echo "Integration merge base: $base"
@@ -86,7 +86,7 @@ jobs:
           echo "Dry merge succeeded; this runner has no write token for the private source."
           git -C private-source diff --cached --stat | tail -n 30
 
-      - name: Confirm precise mobile glow fix is committed without document clipping
+      - name: Confirm precise mobile glow fix and original-logo fallback intact
         working-directory: private-source
         run: |
           python - <<'PY'
@@ -179,14 +179,14 @@ jobs:
         working-directory: private-source/workers/jmr-ratelimit-do
         run: npm test
 
-      - name: Verify exact a63a811 Cloudflare Preview (GET only, no AI usage)
+      - name: Verify PR81 deployment Cloudflare Preview (GET only, no AI usage)
         env:
-          JMR_PREVIEW_ORIGIN: https://569ff7f6.aljamharah.pages.dev
+          JMR_PREVIEW_ORIGIN: https://d4a23566.aljamharah.pages.dev
         run: |
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
           const origin = process.env.JMR_PREVIEW_ORIGIN;
-          if (new URL(origin).hostname !== "569ff7f6.aljamharah.pages.dev") throw new Error("Unexpected Preview origin");
+          if (new URL(origin).hostname !== "d4a23566.aljamharah.pages.dev") throw new Error("Unexpected Preview origin");
           const routes = [
             ["/",200],["/sitemap.xml",200],["/robots.txt",200],
             ["/search.html",200],["/jmr.html",200],["/assets/jmr-fidelity.css",200],["/content/poems.json",200],
@@ -242,7 +242,7 @@ jobs:
       - name: Explain why live Preview checks are manual
         if: github.event_name == 'push'
         run: |
-          echo "The retired jmr-preview-rate-limit-2026 alias returns 404. Offline validation still runs on every push; live Preview checks require a fresh verified Preview URL in workflow_dispatch." >> "$GITHUB_STEP_SUMMARY"
+          echo "The retired jmr-preview-rate-limit-2026 alias returns 404. Offline validation still runs on every push; live Preview checks use the exact candidate deployment URL in workflow_dispatch." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check deployed JMR Preview page and API guard
         if: github.event_name == 'workflow_dispatch' && inputs.preview_url != ''
