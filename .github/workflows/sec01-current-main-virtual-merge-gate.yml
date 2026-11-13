@@ -1,0 +1,122 @@
+name: SEC01 PR86 exact-SHA virtual merge and current-main static parity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sec01-current-main-virtual-merge-gate.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-current-main-parity-2026-11-13
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require existing private source read-only credential
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Private repository read-only credential missing"
+            exit 1
+          fi
+
+      - name: Checkout latest reviewed production source read only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: a62520c321df6f418a0dae987c34ff95415992bd
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+
+      - name: Checkout pinned SEC01 PR86 candidate with read-only history
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: ac629c7a2d704d5658de647259ef24e40d715853
+          fetch-depth: 0
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+
+      - name: Check exact SHA and produce disposable local merge, never push
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "a62520c321df6f418a0dae987c34ff95415992bd"
+          test "$(git -C candidate rev-parse HEAD)" = "ac629c7a2d704d5658de647259ef24e40d715853"
+          git -C candidate cat-file -e a62520c321df6f418a0dae987c34ff95415992bd^{commit}
+          git -C candidate -c user.name='Read-only SEC01 Merge Probe' \
+            -c user.email='ci@invalid.example' \
+            merge --no-ff --no-edit a62520c321df6f418a0dae987c34ff95415992bd
+          echo "Local disposable merge created, no branch write or push."
+
+      - name: Require exactly three new files; forbid any existing-main changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C candidate diff --name-status a62520c321df6f418a0dae987c34ff95415992bd HEAD > /tmp/sec01-changes.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const changed=readFileSync('/tmp/sec01-changes.txt','utf8')
+            .trim().split('\n').filter(Boolean).sort();
+          const expected=[
+            'docs/security/SEC01-READONLY-DEPLOYMENT-AUDIT-2026-11-13-AR.md',
+            'scripts/security/audit-pages-deployments.mjs',
+            'tests/sec01-readonly-deployments.test.mjs'
+          ].map(x=>'A\t'+x).sort();
+          assert.deepEqual(changed,expected);
+          console.log('Only 3 SEC01 docs/tool/test additions, 0 main edits/deletions.');
+          NODE
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install free foundation test dependencies only
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+
+      - name: Verify exact SEC01 tool syntax and mocked GET-only regression tests
+        working-directory: candidate
+        run: |
+          node --check scripts/security/audit-pages-deployments.mjs
+          node --test tests/sec01-readonly-deployments.test.mjs
+
+      - name: Run complete foundation regressions for virtual merge
+        working-directory: candidate
+        run: node scripts/check_site_foundation.mjs
+
+      - name: Independently build static publish assets from each reviewed tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+
+      - name: Verify exact static dist SHA256 and path parity
+        working-directory: candidate
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../baseline/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json
+
+      - name: No tracked changes, secrets or production resource writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          echo "Read-only source gate complete; no Cloudflare calls, deploy, branch write, model call, deletions or artifacts."
