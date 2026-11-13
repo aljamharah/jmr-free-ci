@@ -35,7 +35,7 @@ jobs:
               let htmlInjected=false;
               await context.route('**/*',async route=>{
                 if(route.request().method()!=='GET')return route.abort();
-                if(route.request().resourceType()!=='document'||!route.request().url().endsWith('/poets.html')||variant==='baseline')return route.continue();
+                if(route.request().resourceType()!=='document'||!route.request().url().endsWith('/library.html')||variant==='baseline')return route.continue();
                 const response=await route.fetch();
                 const original=await response.text();
                 const chosen=variant==='both'?['amiri','kufi']:[variant];
@@ -53,6 +53,7 @@ jobs:
                 new PerformanceObserver(list=>{for(const e of list.getEntries())if(!e.hadRecentInput)window.__cls.push({v:e.value,t:e.startTime})}).observe({type:'layout-shift',buffered:true});
               });
               const response=await page.goto(endpoint,{waitUntil:'load',timeout:50000});
+              if(variant!=='baseline'&&!htmlInjected)throw Error('No preload injection applied to candidate '+variant);
               await page.waitForTimeout(900);
               const measures=await page.evaluate(()=>({cls:+window.__cls.reduce((a,b)=>a+b.v,0).toFixed(4),
                  introHeight:Math.round(document.querySelector('#categories')?.getBoundingClientRect().height||0),
