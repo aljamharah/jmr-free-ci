@@ -1,0 +1,98 @@
+name: SEC01 exact SHA public JSON allowlist with source draft retention
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sec01-public-json-allowlist-draft-book-regression.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-public-json-allowlist-draft-book
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout canonical baseline source without persistent credentials
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: aad574cfa0e399f6aeffdd4c8b8cea2648652269
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Checkout exact reviewed security candidate
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: b29e76301f264e4c84a923b6c3f56386a44e05e6
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+      - name: Require exact immutable SHAs
+        run: |
+          test "$(git -C before rev-parse HEAD)" = "aad574cfa0e399f6aeffdd4c8b8cea2648652269"
+          test "$(git -C after rev-parse HEAD)" = "b29e76301f264e4c84a923b6c3f56386a44e05e6"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only free local test dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Build independent sanitized public distributions
+        run: |
+          (cd before && node scripts/build_public_site.mjs)
+          (cd after && node scripts/build_public_site.mjs)
+      - name: Test complete baseline and candidate Node suites with generated indexes
+        shell: bash
+        run: |
+          set +e
+          (cd before && node --test > ../before-node.tap 2>&1)
+          before=$?
+          (cd after && node --test > ../after-node.tap 2>&1)
+          after=$?
+          set -e
+          BEFORE="$before" AFTER="$after" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const score=file=>{
+            const body=readFileSync(file,'utf8');
+            const field=k=>Number(body.match(new RegExp('^# '+k+' (\\d+)$','m'))?.[1]??-1);
+            return {tests:field('tests'),pass:field('pass'),fail:field('fail')};
+          };
+          const a=score('before-node.tap'),b=score('after-node.tap');
+          console.log(JSON.stringify({baseline:a,candidate:b,baseline_ok:process.env.BEFORE==='0',
+            candidate_ok:process.env.AFTER==='0'}));
+          assert.equal(process.env.BEFORE,'0');
+          assert.equal(process.env.AFTER,'0');
+          assert.equal(a.tests,189,'Baseline test discovery unexpectedly changed');
+          assert.equal(b.tests,194,'Five policy tests must be added and no tests lost');
+          assert.equal(a.tests,a.pass);
+          assert.equal(b.tests,b.pass);
+          assert.equal(a.fail+b.fail,0);
+          NODE
+      - name: Run exact source-only draft and public-content policy tests
+        working-directory: after
+        run: node --test tests/public-content-export-policy.test.mjs
+      - name: Run complete foundation regression and publication guards
+        working-directory: after
+        run: node scripts/check_site_foundation.mjs
+      - name: Require unchanged public paths, sizes and SHA256
+        working-directory: after
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../before/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json
+      - name: Confirm no original tracked Git source was modified by tests
+        run: |
+          git -C before diff --exit-code
+          git -C after diff --exit-code
+          echo 'PASS: source drafts remain allowed, only published records can be copied to dist, and existing public assets are unchanged.'
