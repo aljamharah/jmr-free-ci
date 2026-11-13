@@ -91,13 +91,17 @@ jobs:
             "/poets.html":['id="searchButton"'],
             "/poet.html":['id="searchButton"'],
             "/poem.html":['id="searchButton"'],
-            "/jmr.html":['!["curated_reference", "poet_biography_reference", "quran_corpus"].includes']
+            "/jmr.html":['!["curated_reference", "poet_biography_reference", "quran_corpus"].includes'],
+            "/privacy.html":['id="privacyTitle"','id="privacyPolicy"','name="robots" content="noindex,follow"']
           };
           let passed=0;
           for(const [path,tokens] of Object.entries(markers)){
             const r=await get(path);
             const ok=r.status===200&&tokens.every(x=>r.body.includes(x));
             console.log("PUBLIC_PAGE "+path+" ok="+ok);
+            const linked=r.status===200&&r.body.includes('href="privacy.html"');
+            console.log("PUBLIC_PRIVACY_FOOTER "+path+" linked="+linked);
+            if(!linked)process.exitCode=1;
             if(!ok)process.exitCode=1;
             else passed++;
           }
