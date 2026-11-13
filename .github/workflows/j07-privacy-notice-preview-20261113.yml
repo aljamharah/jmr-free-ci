@@ -82,7 +82,7 @@ jobs:
               await delay(250);
             }
             assert.equal(ready,true,"Sanitized preview failed to start");
-            browser=await chromium.launch({headless:true});
+            browser=await chromium.launch({channel:"chrome",headless:true,args:["--no-sandbox"]});
             for(const width of [390,1280]){
               const page=await browser.newPage({viewport:{width,height:850}});
               const errors=[];
