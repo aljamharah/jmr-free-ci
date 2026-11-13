@@ -20,7 +20,7 @@ jobs:
         run: npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright @axe-core/playwright
       - name: GET-only Chrome mobile performance baseline, WCAG A/AA
         env:
-          SITE: https://d4a23566.aljamharah.pages.dev
+          SITE: https://02cbfe8d.aljamharah.pages.dev
         run: |
           node --input-type=module <<'NODE'
           import {chromium} from "playwright";
@@ -84,6 +84,12 @@ jobs:
             await context.close();
            }
            assert.ok(results.every(r=>r.status===200),"One or more audited pages failed to load");
+           assert.ok(results.every(r=>r.scrollExcess===0 && r.errors===0),"Horizontal overflow or JS errors detected");
+           assert.ok(results.every(r=>r.encodedKiB<1600),"Excessive page transfer; probable unoptimized logo regression");
+           assert.ok(results.every(r=>!r.topResources.some(x=>x.path.endsWith("AFF71118-81CC-48DF-A661-4410C687EC8F.png"))),"Original multi-megabyte logo loaded on Chrome");
+           const wcag=results.flatMap(r=>r.wcagViolations.map(v=>({page:r.path,...v})));
+           assert.deepEqual(wcag,[],"Critical/supported WCAG A/AA issue detected: "+JSON.stringify(wcag));
+           console.log("PR81_ACCESSIBILITY_AND_PAYLOAD_GATES PASS pages="+results.length+" maxKiB="+Math.max(...results.map(r=>r.encodedKiB))+" violations="+wcag.length);
            const count=results.reduce((n,r)=>n+r.wcagViolations.length,0);
            console.log("AUDIT_COMPLETE pages="+results.length+" totalWCAGFindingTypes="+count+" simulated4Gpages=4; GET-only; AI_calls=0; no production writes");
           }finally{await browser.close()}
