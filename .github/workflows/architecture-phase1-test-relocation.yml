@@ -71,22 +71,28 @@ jobs:
       - name: Compare complete baseline and candidate Node test discovery
         shell: bash
         run: |
-          set -euo pipefail
-          (cd baseline && node --test > ../baseline-node.tap)
-          (cd candidate && node --test > ../candidate-node.tap)
-          node --input-type=module <<'NODE'
+          set +e
+          (cd baseline && node --test > ../baseline-node.tap 2>&1)
+          baseline_status=$?
+          (cd candidate && node --test > ../candidate-node.tap 2>&1)
+          candidate_status=$?
+          set -e
+          BASELINE_STATUS="$baseline_status" CANDIDATE_STATUS="$candidate_status" node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import { readFileSync } from 'node:fs';
           function report(name) {
             const t=readFileSync(name,'utf8');
-            const get=(key)=>{const m=t.match(new RegExp('^# '+key+' (\\d+)$','m'));assert.ok(m, 'missing '+key+' in '+name);return Number(m[1]);};
-            return {tests:get('tests'),pass:get('pass'),fail:get('fail'),cancelled:get('cancelled')};
+            const get=(key)=>{const m=t.match(new RegExp('^# '+key+' ([0-9]+)$','m'));return m?Number(m[1]):null;};
+            return {tests:get('tests'),pass:get('pass'),fail:get('fail'),cancelled:get('cancelled'),
+              failedNames:t.split('\n').filter(line=>line.startsWith('not ok ')).slice(0,10).map(x=>x.slice(0,140))};
           }
           const a=report('baseline-node.tap'),b=report('candidate-node.tap');
-          assert.deepEqual(a,b,'Moving the test changed Node test coverage');
+          console.log(JSON.stringify({baselineStatus:process.env.BASELINE_STATUS,candidateStatus:process.env.CANDIDATE_STATUS,baseline:a,candidate:b}));
+          assert.equal(process.env.BASELINE_STATUS,'0','baseline Node tests failed');
+          assert.equal(process.env.CANDIDATE_STATUS,'0','candidate Node tests failed');
           assert.equal(a.tests,a.pass);
-          assert.equal(a.fail,0);
-          console.log(JSON.stringify({testCounts:a,identical:true}));
+          assert.equal(b.tests,b.pass);
+          assert.equal(a.tests,b.tests,'Moving the test changed Node test coverage');
           NODE
       - name: Run full technical foundation regression
         working-directory: candidate
