@@ -1,0 +1,70 @@
+name: SEC01 verify anonymous Preview Access for both Pages projects
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sec01-anonymous-access-check.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-both-projects-anonymous-access
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify historic and recent Preview URLs require login, production roots stay public
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const cases=[
+            {label:'main_historical_preview',origin:'https://04c7613d.aljamharah.pages.dev',kind:'preview'},
+            {label:'main_recent_preview',origin:'https://899e98d6.aljamharah.pages.dev',kind:'preview'},
+            {label:'staging_historical_preview',origin:'https://53befc8e.aljamharah-staging.pages.dev',kind:'preview'},
+            {label:'main_public_production',origin:'https://aljamharah.pages.dev',kind:'production'},
+            {label:'staging_public_production',origin:'https://aljamharah-staging.pages.dev',kind:'production'}
+          ];
+          function isAccessLogin(location,origin) {
+            if(!location)return false;
+            try{
+              const dest=new URL(location,origin);
+              if(dest.protocol!=='https:')return false;
+              if(dest.hostname.endsWith('.cloudflareaccess.com'))return true;
+              return dest.origin===origin&&dest.pathname.startsWith('/cdn-cgi/access/');
+            }catch{return false}
+          }
+          let checked=0;
+          for(const item of cases){
+            const r=await fetch(item.origin+'/',{
+              method:'GET',redirect:'manual',headers:{'Cache-Control':'no-cache'},
+              signal:AbortSignal.timeout(18000)
+            });
+            let statusKind='unexpected';
+            if(item.kind==='preview'){
+              if([401,403].includes(r.status))statusKind='access_denied';
+              else if([301,302,303,307,308].includes(r.status)&&
+                isAccessLogin(r.headers.get('location'),item.origin))
+                statusKind='access_login_redirect';
+              assert.notEqual(statusKind,'unexpected',
+                'Preview publicly reachable or redirect not authenticated: '+item.label+' status '+r.status);
+            }else{
+              assert.equal(r.status,200,'Public Production root must remain 200: '+item.label);
+              statusKind='production_public';
+            }
+            await r.body?.cancel();
+            console.log(JSON.stringify({target:item.label,classification:statusKind,
+              status:r.status,response_bodies_logged:false}));
+            checked++;
+          }
+          assert.equal(checked,cases.length);
+          console.log('SEC01 both projects Access route smoke PASS. No login data, headers, URLs, response bodies, tokens, model calls or Cloudflare writes logged.');
+          NODE
