@@ -125,7 +125,7 @@ jobs:
             assert.ok(before>=0.06,"Baseline too low for meaningful CLS comparison; manual evaluation required");
             assert.ok(after<=before*0.6,"No meaningful CLS improvement in controlled test");
             // Additional exact-layout invariant across desktop, tablet and small phones.
-            const widths=[320,360,600,768,1280];
+            const widths=[320,340,360,390,600,768,1280],mismatches=[];
             for(const width of widths){
               const measured={};
               for(const source of ["baseline","candidate"]){
@@ -152,9 +152,10 @@ jobs:
               assert.equal(measured.candidate.overflow,0);
               assert.ok(Math.abs(measured.baseline.loaded-measured.candidate.loaded)<=2,
                 "PR110 changed loaded category geometry at width "+width);
-              assert.ok(Math.abs(measured.candidate.reserve-measured.candidate.loaded)<=4,
-                "Initial CSS reservation differs from fully loaded grid at width "+width);
+              if(Math.abs(measured.candidate.reserve-measured.candidate.loaded)>4)
+                mismatches.push({width,actual:measured.candidate.loaded,reserved:measured.candidate.reserve});
             }
+            assert.deepEqual(mismatches,[],"Transient reservation differs from loaded cards at measured widths");
             console.log("CLS_IMPROVEMENT_GATE PASS no permanent visual changes; tested exact candidate SHA");
           }finally{await browser.close();await Promise.all(Object.values(roots).map(o=>new Promise(r=>o.server.close(r))))}
           NODE
