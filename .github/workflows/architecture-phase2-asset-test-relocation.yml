@@ -1,0 +1,138 @@
+name: Architecture phase 2 isolated asset-audit test relocation parity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/architecture-phase2-asset-test-relocation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-phase2-asset-test-relocation
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout pinned latest reviewed main (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 3c8f99d46ee7cbd461a6f6da944d7089759f2e1c
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+
+      - name: Checkout pinned phase 2 candidate (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: e68916ce9797360df5bd37596362b87beea98548
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+
+      - name: Verify exact revision and no extra changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "3c8f99d46ee7cbd461a6f6da944d7089759f2e1c"
+          test "$(git -C candidate rev-parse HEAD)" = "e68916ce9797360df5bd37596362b87beea98548"
+          git -C candidate diff --name-status --no-renames 3c8f99d46ee7cbd461a6f6da944d7089759f2e1c e68916ce9797360df5bd37596362b87beea98548 > /tmp/phase2-changes.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const lines=readFileSync('/tmp/phase2-changes.txt','utf8').trim().split('\n').sort();
+          const expected=[
+            'M\tdocs/architecture/HANDOFF-2026-11-13-AR.md',
+            'M\tdocs/architecture/RELOCATION-DEPENDENCY-MATRIX-2026-11-13-AR.md',
+            'D\ttests/architecture-asset-references.test.mjs',
+            'A\ttests/architecture/asset-references.test.mjs'
+          ].sort();
+          assert.deepEqual(lines,expected,'Phase 2 moved or changed unexpected files');
+          const original=readFileSync('baseline/tests/architecture-asset-references.test.mjs','utf8');
+          const relocated=readFileSync('candidate/tests/architecture/asset-references.test.mjs','utf8');
+          assert.equal(relocated,original.replace(
+            "'../scripts/validation/audit-static-asset-references.mjs'",
+            "'../../scripts/validation/audit-static-asset-references.mjs'"
+          ));
+          console.log('Exactly one unchanged test moved (relative import corrected) and 2 docs updated.');
+          NODE
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only open-source local test dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+
+      - name: Run the relocated fixture tests exactly
+        working-directory: candidate
+        run: node --test tests/architecture/asset-references.test.mjs
+
+      - name: Build independent sanitized distributions before raw test discovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+
+      - name: Test full Node discovery on BOTH baseline and candidate
+        shell: bash
+        run: |
+          set +e
+          (cd baseline && node --test > ../baseline-phase2.tap 2>&1)
+          baseline_status=$?
+          (cd candidate && node --test > ../candidate-phase2.tap 2>&1)
+          candidate_status=$?
+          set -e
+          BASELINE_STATUS="$baseline_status" CANDIDATE_STATUS="$candidate_status" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const report=name=>{
+            const txt=readFileSync(name,'utf8');
+            const val=field=>Number(txt.match(new RegExp('^# '+field+' (\\d+)$','m'))?.[1]??-1);
+            return {tests:val('tests'),pass:val('pass'),fail:val('fail')};
+          };
+          const a=report('baseline-phase2.tap'),b=report('candidate-phase2.tap');
+          console.log(JSON.stringify({baselineStatus:process.env.BASELINE_STATUS,candidateStatus:process.env.CANDIDATE_STATUS,baseline:a,candidate:b}));
+          assert.equal(process.env.BASELINE_STATUS,'0');
+          assert.equal(process.env.CANDIDATE_STATUS,'0');
+          assert.ok(a.tests>=185,'Full historical test discovery was unexpectedly reduced');
+          assert.equal(a.tests,a.pass);
+          assert.equal(b.tests,b.pass);
+          assert.equal(a.tests,b.tests);
+          assert.equal(a.fail+b.fail,0);
+          NODE
+
+      - name: Run full technical foundation regression on candidate
+        working-directory: candidate
+        run: node scripts/check_site_foundation.mjs
+
+      - name: Run Python source validators on candidate
+        working-directory: candidate
+        run: |
+          python scripts/validate_library.py
+          python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Require identical public paths bytes and SHA256
+        working-directory: candidate
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../baseline/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json
+
+      - name: Confirm no tracked source was changed by tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          echo "PASS: phase2 static parity, no Cloudflare writes, no AI requests, no files deleted outside the isolated relocation."
