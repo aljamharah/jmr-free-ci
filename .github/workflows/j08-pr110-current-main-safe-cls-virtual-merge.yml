@@ -47,12 +47,14 @@ jobs:
           assert.equal(diff,'M\tlibrary.html','Only the library entrypoint may change');
           const before=readFileSync('baseline/library.html','utf8');
           const after=readFileSync('candidate/library.html','utf8');
-          const inserted=String.raw`
-/* CLS guard only while the initial grid is empty. As soon as renderCategories
-   appends the six cards, this rule stops matching: no lasting visual change. */
-#categories:empty{min-height:310px}
-@media(min-width:601px) and (max-width:850px){#categories:empty{min-height:472px}}
-@media(max-width:600px){#categories:empty{min-height:max(402px,calc(807px - 110vw))}}`;
+          const inserted=[
+            '',
+            '/* CLS guard only while the initial grid is empty. As soon as renderCategories',
+            '   appends the six cards, this rule stops matching: no lasting visual change. */',
+            '#categories:empty{min-height:310px}',
+            '@media(min-width:601px) and (max-width:850px){#categories:empty{min-height:472px}}',
+            '@media(max-width:600px){#categories:empty{min-height:max(402px,calc(807px - 110vw))}}'
+          ].join('\n');
           assert.equal(after.split(inserted).length,2,'CSS-only guard insertion missing or repeated');
           assert.equal(after.replace(inserted,''),before,
             'Post-merge HTML must be identical except the exact transient empty-grid style');
