@@ -118,7 +118,7 @@ jobs:
             const avg=a=>a.reduce((s,v)=>s+v.cls,0)/a.length;
             const before=avg(results.baseline),after=avg(results.candidate);
             console.log("CLS_COMPARE "+JSON.stringify({before:Number(before.toFixed(4)),after:Number(after.toFixed(4)),runs:results}));
-            assert.ok(results.candidate.every(x=>x.renderedCards===6&&x.overflow===0&&x.reserve>=470&&x.naturalMin==="auto"),
+            assert.ok(results.candidate.every(x=>x.renderedCards===6&&x.overflow===0&&x.reserve>=470&&parseFloat(x.naturalMin)===0),
               "Transient reservation changed loaded cards/overflow or did not disappear after render");
             assert.ok(Math.abs(results.candidate[0].loadedHeight-results.baseline[0].loadedHeight)<=2,
               "Approved loaded grid geometry changed");
