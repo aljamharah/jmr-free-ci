@@ -89,7 +89,7 @@ jobs:
             try{raw=await readBounded(r)}catch{return 'unverified_body_read'}
             if(raw===null)return 'unverified_size_or_empty';
             let data;
-            try{data=JSON.parse(raw)}catch{return 'unverified_non_json';
+            try{data=JSON.parse(raw)}catch{return 'unverified_non_json'}
             if(!data||!Array.isArray(data.poems)||data.poems.length===0)return 'unverified_schema';
             for(const row of data.poems) {
               if(!row||typeof row!=='object'||row.publication_status!=='published')return 'suspected_exposure';
