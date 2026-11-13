@@ -159,3 +159,43 @@ jobs:
             console.log("PRODUCTION CHROMIUM "+assertions+" assertions passed; viewports=320,360,390,414,1280; pages=5; book_rights=source_only; intercepted_heavy_shards="+heavy+"; model_calls="+modelCalls+"; browser_requests="+requests);
           }finally{await browser.close()}
           NODE
+
+      - name: Production unified search J-05 (published poet and book results only)
+        env:
+          SITE: https://aljamharah.pages.dev
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import {chromium} from "playwright";
+          let browser;
+          try{browser=await chromium.launch({channel:"chrome",headless:true,args:["--no-sandbox"]})}
+          catch{browser=await chromium.launch({headless:true,args:["--no-sandbox"]})}
+          try{
+            const page=await browser.newPage({viewport:{width:390,height:844},locale:"ar"});
+            const requests=[],consoleErrors=[];
+            await page.route("**/*",route=>{
+              const req=route.request();
+              if(req.method()!=="GET")throw Error("No POST methods allowed");
+              if(/jamharah_lexicon_[0-9]+\.json/.test(req.url()))throw Error("Massive lexicon shard must not load");
+              requests.push(new URL(req.url()).pathname);
+              return route.continue();
+            });
+            page.on("pageerror",e=>consoleErrors.push(e.message));
+            await page.goto(process.env.SITE+"/search.html?q="+encodeURIComponent("المتنبي")+"&type=poets",{waitUntil:"domcontentloaded",timeout:25000});
+            await page.waitForFunction(()=>document.querySelector("#unifiedStatus")?.textContent?.includes("عُثر"),{timeout:15000});
+            const poets=await page.locator("#unifiedResults a.unified-result").all();
+            assert.ok(poets.length>0,"No published poet results for المتنبي");
+            assert.ok((await page.locator("#unifiedResults").innerText()).includes("المتنبي"));
+            assert.ok(await page.locator('a[href*="poet.html?slug=al-mutanabbi"]').count()>0);
+            await page.locator("#unifiedQuery").fill("القوافي");
+            await page.locator("#unifiedType").selectOption("books");
+            await page.locator("#unifiedForm").evaluate(el=>el.requestSubmit());
+            await page.waitForFunction(()=>document.querySelector("#unifiedStatus")?.textContent?.includes("عُثر")&&document.querySelector("#unifiedStatus")?.textContent?.includes("القوافي"),{timeout:15000});
+            const bookResults=await page.locator("#unifiedResults a.unified-result").count();
+            assert.ok(bookResults>0,"No published book results for القوافي");
+            assert.ok(await page.locator('a[href*="book.html?id=akhfash-qawafi"]').count()>0);
+            assert.equal(consoleErrors.length,0,"Search triggered JavaScript error: "+consoleErrors.join(";"));
+            console.log("LIVE_UNIFIED_SEARCH PASS; poet_matches="+poets.length+"; book_matches="+bookResults+"; input_switch=OK; lexicon_massive_shards="+requests.filter(x=>/jamharah_lexicon_[0-9]+\.json/.test(x)).length+"; model_calls=0");
+            await page.close();
+          }finally{await browser.close()}
+          NODE
