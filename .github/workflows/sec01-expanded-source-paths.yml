@@ -1,0 +1,217 @@
+name: SEC01 extended historical source-path audit read only
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sec01-expanded-source-paths.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-expanded-historical-source-paths
+  cancel-in-progress: false
+
+jobs:
+  sample:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Audit historical Pages private-source routes (GET only); redacted counts only
+        env:
+          ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const account=process.env.ACCOUNT,token=process.env.TOKEN;
+          if(!/^[a-f0-9]{32}$/i.test(account||'')||!(token?.length>=12))throw Error('Missing existing credential; no requests sent');
+          const PROJECTS=['aljamharah','aljamharah-staging'];
+          const ENVIRONMENTS=['production','preview'];
+          const PATHS=['/content/poems.json','/content/poems%2Ejson',
+            '/content/poems%252Ejson','/functions/api/jmr.js',
+            '/scripts/build_public_site.mjs','/content/jmr/knowledge/evaluations.json',
+            '/content/jmr/quran/SOURCE.json','/tests/jmr-quality.test.js',
+            '/content/poems/ibn-duraid-welcome.md'];
+          const allowed=new Set(['slug','title','poet_slug','era_id','collection_id','verse_count',
+            'poem_subject','poem_type','meter','rhyme_letter','source_reference','source_url',
+            'text_status','rights_status','publication_status','body']);
+          const permittedRights=new Set(['public_domain','permission_granted']);
+          const metrics={};
+          let origins=0,routes=0;
+          const safeGet=async(path)=>{
+            const url='https://api.cloudflare.com/client/v4/accounts/'+account+'/pages/projects/'+path;
+            const r=await fetch(url,{method:'GET',redirect:'error',
+              headers:{Authorization:'Bearer '+token,Accept:'application/json'},
+              signal:AbortSignal.timeout(15000)});
+            if(!r.ok)throw Error('Cloudflare GET failed with status '+r.status);
+            const j=await r.json();
+            if(j?.success!==true||!Array.isArray(j.result)||!j.result_info)throw Error('Unverified Cloudflare API response');
+            return j;
+          };
+          function getOrigin(raw,project){
+            if(typeof raw!=='string')return null;
+            try {
+              const u=new URL(raw);
+              const host=project+'.pages.dev';
+              if(u.protocol!=='https:'||u.username||u.password||u.port||u.pathname!=='/'||u.search||u.hash)return null;
+              if(!u.hostname.endsWith('.'+host))return null;
+              const label=u.hostname.slice(0,-host.length-1);
+              if(!/^[a-z0-9][a-z0-9-]{0,62}$/.test(label))return null;
+              return u.origin;
+            } catch {return null}
+          }
+          async function readBounded(response,maxBytes=786432){
+            const declared=Number(response.headers.get('content-length')||'0');
+            if(declared>maxBytes)return null;
+            const reader=response.body?.getReader();
+            if(!reader)return null;
+            let count=0;const chunks=[];
+            while(true){
+              const x=await reader.read();
+              if(x.done)break;
+              count+=x.value.byteLength;
+              if(count>maxBytes){await reader.cancel();return null;}
+              chunks.push(x.value);
+            }
+            return new TextDecoder().decode(Buffer.concat(chunks.map(c=>Buffer.from(c))));
+          }
+          // Never print raw response headers: allow only fixed, non-identifying MIME categories.
+          function mimeClass(header) {
+            const mime=typeof header==='string'?header.split(';',1)[0].trim().toLowerCase():'';
+            if(mime==='text/html'||mime==='application/xhtml+xml')return 'html';
+            if(mime==='application/json'||mime.endsWith('+json'))return 'json';
+            if(mime==='text/plain')return 'plain';
+            if(mime==='application/octet-stream')return 'binary';
+            return mime?'other':'missing';
+          }
+          // A same-body HTML fallback to '/' is only diagnostic, never clearance.
+          // Cache at most one bounded root response per sampled origin, without logging it.
+          const homeCache=new Map();
+          let rootChecks=0;
+          async function compareRootHtml(origin,raw){
+            if(!homeCache.has(origin)){
+              rootChecks++;
+              let home=null;
+              try {
+                const r=await fetch(origin+'/',{method:'GET',redirect:'manual',
+                  headers:{Accept:'application/json'},signal:AbortSignal.timeout(12000)});
+                if(r.status===200 && mimeClass(r.headers.get('content-type'))==='html'){
+                  home=await readBounded(r);
+                }
+              }catch{home=null}
+              homeCache.set(origin,home);
+            }
+            const home=homeCache.get(origin);
+            if(home===null)return 'unverified_html_root_unavailable';
+            return raw===home?'unverified_html_matches_home':'unverified_html_differs_from_home';
+          }
+          async function probe(origin,path){
+            let r;
+            try{
+              r=await fetch(origin+path,{method:'GET',redirect:'manual',headers:{Accept:'application/json'},
+                signal:AbortSignal.timeout(12000)});
+            }catch{return 'unverified_network'}
+            if(r.status===403||r.status===404)return 'blocked';
+            if(r.status!==200)return 'unverified_http_'+r.status;
+            let raw;
+            try{raw=await readBounded(r)}catch{return 'unverified_body_read'}
+            if(raw===null)return 'unverified_size_or_empty';
+            const classifiedPoem=PATHS.slice(0,3).includes(path);
+            if(!classifiedPoem&&raw.trim()&&mimeClass(r.headers.get('content-type'))!=='html')
+              return 'suspected_exposure';
+            let data;
+            try{data=JSON.parse(raw)}catch{
+              if(mimeClass(r.headers.get('content-type'))==='html')
+                return await compareRootHtml(origin,raw);
+              return 'unverified_non_json_'+mimeClass(r.headers.get('content-type'));
+            }
+            if(!data||!Array.isArray(data.poems)||data.poems.length===0)return 'unverified_schema';
+            for(const row of data.poems) {
+              if(!row||typeof row!=='object'||row.publication_status!=='published')return 'suspected_exposure';
+              if(Object.keys(row).some(k=>!allowed.has(k)))return 'suspected_exposure';
+              if(typeof row.body==='string'&&row.body.trim()&&
+                (!permittedRights.has(row.rights_status)||row.text_status!=='local_text'))
+                return 'suspected_exposure';
+            }
+            return 'allowlisted_public';
+          }
+
+          // Snapshot complete paginated deployment inventory, then probe each verified origin.
+          const tasks=[];
+          const allIds=new Set();
+          for(const project of PROJECTS)for(const env of ENVIRONMENTS){
+            const key=project+'/'+env;
+            const stats={listed:0,checked_origins:0,checked_routes:0,blocked:0,allowlisted_public:0,
+              suspected_exposure:0,unverified:0,unverified_reasons:{},by_route:{},unverified_origin:0,total_pages:0};
+            metrics[key]=stats;
+            const pre=project+'/deployments?env='+env+'&per_page=25&page=';
+            const first=await safeGet(pre+'1');
+            const total=first.result_info.total_pages;
+            if(!Number.isSafeInteger(total)||total<0||total>100)throw Error('Incomplete pagination at source');
+            stats.total_pages=total;
+            const totalCount=first.result_info.total_count;
+            if(!Number.isSafeInteger(totalCount)||totalCount<0)throw Error('Invalid total count in API response');
+            for(let page=1;page<=Math.max(total,1);page++){
+              const data=page===1?first:await safeGet(pre+page);
+              const info=data.result_info;
+              const reasons=[];
+              if(info.page!==page)reasons.push('page_mismatch');
+              if(info.total_pages!==total)reasons.push('total_pages_moved');
+              if(info.total_count!==totalCount)reasons.push('total_count_moved');
+              if(!Number.isSafeInteger(info.per_page)||info.per_page<1||info.per_page>25)reasons.push('per_page_invalid');
+              if(data.result.length>info.per_page)reasons.push('oversized_result');
+              if(reasons.length)throw Error('Inventory needs rebaseline: '+key+' page='+page+' '+reasons.join(','));
+              if(page<total&&data.result.length!==info.per_page)throw Error('Truncated non-final page');
+              for(const dep of data.result){
+                if(!dep||typeof dep.id!=='string'||allIds.has(dep.id)||
+                  dep.project_name!==project||dep.environment!==env)throw Error('Untrusted or duplicate deployment record');
+                allIds.add(dep.id);
+                stats.listed++;
+                const origin=getOrigin(dep.url,project);
+                if(!origin){stats.unverified_origin++;continue;}
+                tasks.push({key,origin});
+              }
+            }
+            if(stats.listed!==totalCount)throw Error('Deployment count changed mid-inventory');
+          }
+          // Cap parallelism and response sizes to avoid overloading Pages or leaking editorial content.
+          // Never store results per-origin; only aggregate fixed classification labels.
+          let cursor=0;
+          const W=6;
+          async function worker(){
+            while(true){
+              const index=cursor++;
+              if(index>=tasks.length)return;
+              const {key,origin}=tasks[index];
+              const stats=metrics[key];
+              stats.checked_origins++;origins++;
+              for(const route of PATHS){
+                const outcome=await probe(origin,route);
+                stats.by_route[route] ||= {};
+                stats.by_route[route][outcome]=(stats.by_route[route][outcome]||0)+1;
+                if(outcome.startsWith('unverified_')){
+                  stats.unverified++;
+                  stats.unverified_reasons[outcome]=(stats.unverified_reasons[outcome]||0)+1;
+                }else if(Object.hasOwn(stats,outcome))stats[outcome]++;
+                else throw Error('Unexpected exposure classifier state');
+                stats.checked_routes++;routes++;
+              }
+            }
+          }
+          await Promise.all(Array.from({length:W},()=>worker()));
+          if(Object.values(metrics).reduce((n,x)=>n+x.listed,0)!==allIds.size)
+            throw Error('Inventory accounting mismatch');
+          console.log(JSON.stringify({mode:'GET-only-redacted-full-inventory',sample_only:false,
+            checked_origins:origins,checked_routes:routes,extra_root_checks:rootChecks,
+            path_count:PATHS.length,summary:metrics,
+            full_historical_safety_confirmed:false,deletion_approved:false},null,2));
+          console.log('Only bounded safe-host GETs. No poem text, UUID, URL, secret, raw MIME, content hash, or source response printed/saved/uploaded. No POST/DELETE/PATCH or model invocation.');
+          if(Object.values(metrics).some(x=>x.suspected_exposure>0||x.unverified>0||x.unverified_origin>0))
+            throw Error('Sample needs further security review; no deployment cleared for deletion');
+          NODE
