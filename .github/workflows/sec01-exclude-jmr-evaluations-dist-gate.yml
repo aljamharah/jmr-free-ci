@@ -1,0 +1,154 @@
+name: SEC01 exclude internal JMR evaluations - exact output removal and full test parity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sec01-exclude-jmr-evaluations-dist-gate.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-source-only-jmr-evaluations-release-gate
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout pinned private main before security fix
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: dea3e845c2e089b41a533c673587408d2ae1ab57
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+
+      - name: Checkout pinned private security candidate with history
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 905223b9e9ee3f8f005b4a07281790132e242a41
+          fetch-depth: 0
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+
+      - name: Verify precise two-file source change and unchanged test corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "dea3e845c2e089b41a533c673587408d2ae1ab57"
+          test "$(git -C candidate rev-parse HEAD)" = "905223b9e9ee3f8f005b4a07281790132e242a41"
+          git -C candidate diff --name-status dea3e845c2e089b41a533c673587408d2ae1ab57 905223b9e9ee3f8f005b4a07281790132e242a41 > /tmp/sec01-source-change.txt
+          cmp baseline/content/jmr/knowledge/evaluations.json candidate/content/jmr/knowledge/evaluations.json
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const actual=readFileSync('/tmp/sec01-source-change.txt','utf8').trim().split('\n').sort();
+          assert.deepEqual(actual, [
+            'M\tscripts/build_public_site.mjs',
+            'M\tscripts/test_public_site_build.mjs'
+          ].sort());
+          console.log('Only build allowlist and its tests modified; 61-case JMR source corpus is unchanged.');
+          NODE
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install free local Python validation libraries
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+
+      - name: Build both isolated public release trees independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+
+      - name: Confirm EXACTLY one public file removed and all other output bytes identical
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          function read(prefix){
+            const manifest=JSON.parse(readFileSync(prefix+'/build-reports/dist-inventory.json','utf8'));
+            assert.equal(manifest.scope,'static-dist-only');
+            return new Map(manifest.files.map(f=>[f.path,f]));
+          }
+          const before=read('baseline'),after=read('candidate');
+          const removed=[...before.keys()].filter(k=>!after.has(k)).sort();
+          const added=[...after.keys()].filter(k=>!before.has(k)).sort();
+          const changed=[...after.keys()].filter(k=>before.has(k)&&(
+            before.get(k).bytes!==after.get(k).bytes||
+            before.get(k).sha256!==after.get(k).sha256)).sort();
+          const expected='content/jmr/knowledge/evaluations.json';
+          assert.equal(before.size,875,'Pinned production baseline output count moved unexpectedly');
+          assert.equal(after.size,874,'Candidate output count unexpectedly changed');
+          assert.deepEqual(removed,[expected],'More than one public path removed');
+          assert.deepEqual(added,[],'Unexpected new public paths');
+          assert.deepEqual(changed,[],'Other published bytes changed');
+          assert.ok(after.has('content/jmr/knowledge/index.json'));
+          assert.ok(after.has('content/jmr/quran/tanzil-uthmani-1.1.json'));
+          assert.ok(after.has('content/poems.json'));
+          console.log(JSON.stringify({baseline_files:before.size,candidate_files:after.size,
+            exact_expected_removed_path:expected,other_changed_files:changed.length,
+            other_added_files:added.length,all_remaining_files_hash_identical:true,
+            internal_evaluation_corpus_preserved_in_source:true}));
+          NODE
+
+      - name: Compare complete Node test discovery on both isolated builds
+        shell: bash
+        run: |
+          set +e
+          (cd baseline && node --test > ../baseline-sec01.tap 2>&1)
+          before=$?
+          (cd candidate && node --test > ../candidate-sec01.tap 2>&1)
+          after=$?
+          set -e
+          BEFORE="$before" AFTER="$after" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          function report(file){
+            const t=readFileSync(file,'utf8');
+            const get=k=>Number(t.match(new RegExp('^# '+k+' (\\d+)$','m'))?.[1]??-1);
+            return {tests:get('tests'),pass:get('pass'),fail:get('fail')};
+          }
+          const before=report('baseline-sec01.tap'),after=report('candidate-sec01.tap');
+          console.log(JSON.stringify({baseline_exit:process.env.BEFORE,candidate_exit:process.env.AFTER,baseline:before,candidate:after}));
+          assert.equal(process.env.BEFORE,'0');
+          assert.equal(process.env.AFTER,'0');
+          assert.equal(before.tests,189);
+          assert.equal(after.tests,before.tests);
+          assert.equal(before.tests,before.pass);
+          assert.equal(after.tests,after.pass);
+          assert.equal(before.fail+after.fail,0);
+          NODE
+
+      - name: Test candidate full foundation and public-build regression
+        working-directory: candidate
+        run: node scripts/check_site_foundation.mjs
+
+      - name: Validate local source library and Python tests
+        working-directory: candidate
+        run: |
+          python scripts/validate_library.py
+          python scripts/validate_jmr_knowledge.py
+          python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Enforce no tracked private source changes from the tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          echo 'PASS: one internal benchmark JSON no longer in future static output; no source deletion, Cloudflare mutations, or AI model calls.'
