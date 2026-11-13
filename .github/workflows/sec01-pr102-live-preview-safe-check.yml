@@ -1,0 +1,79 @@
+name: SEC01 PR102 Preview verify excluded internal evaluation data with GET only
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sec01-pr102-live-preview-safe-check.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-pr102-preview-no-private-data
+  cancel-in-progress: false
+
+jobs:
+  read-only:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify excluded evaluation fixture and preserved approved JSON without model calls
+        env:
+          SAFE_PREVIEW: https://899e98d6.aljamharah.pages.dev
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const origin=process.env.SAFE_PREVIEW;
+          assert.match(origin,/^https:\/\/[a-f0-9]{8}\.aljamharah\.pages\.dev$/);
+          async function get(path) {
+            let target=origin+path;
+            for(let i=0;i<3;i++){
+              const r=await fetch(target,{method:'GET',redirect:'manual',
+                signal:AbortSignal.timeout(18000)});
+              if(r.status<300||r.status>=400)return r;
+              const next=new URL(r.headers.get('location')||'',target);
+              if(next.origin!==origin||next.protocol!=='https:')
+                throw Error('Cross-origin redirect refused');
+              target=next.href;
+            }
+            throw Error('Too many redirects');
+          }
+          async function bounded(r,max=262144){
+            const bytes=await r.arrayBuffer();
+            if(bytes.byteLength>max)throw Error('Unexpected large public response');
+            return new TextDecoder().decode(bytes);
+          }
+          const root=await get('/');
+          assert.equal(root.status,200,'Preview homepage');
+          const rootHtml=await bounded(root);
+          const evalResponse=await get('/content/jmr/knowledge/evaluations.json');
+          assert.ok([200,403,404].includes(evalResponse.status),'Unexpected evaluation route response');
+          let classification;
+          if(evalResponse.status===200){
+            const mime=(evalResponse.headers.get('content-type')||'').split(';',1)[0].toLowerCase();
+            assert.ok(['text/html','application/xhtml+xml'].includes(mime),'Internal benchmark returned as a raw non-HTML asset');
+            const evalHtml=await bounded(evalResponse);
+            assert.equal(evalHtml,rootHtml,'Internal benchmark path must only display public homepage fallback');
+            classification='same-origin public homepage fallback';
+          }else classification='blocked';
+          const knowledge=await get('/content/jmr/knowledge/index.json');
+          assert.equal(knowledge.status,200,'Public JMR knowledge index must stay available');
+          const index=JSON.parse(await bounded(knowledge,524288));
+          assert.ok(Array.isArray(index.entries)&&index.entries.length>=50);
+          const poems=await get('/content/poems.json');
+          assert.equal(poems.status,200,'Public poem catalog');
+          const j=JSON.parse(await bounded(poems));
+          assert.ok(Array.isArray(j.poems)&&j.poems.length>0);
+          assert.ok(j.poems.every(p=>p.publication_status==='published'&&!Object.hasOwn(p,'editorial_token')&&!Object.hasOwn(p,'rights_basis')));
+          const api=await get('/api/jmr');
+          assert.equal(api.status,405,'JMR GET must not call Workers AI');
+          console.log(JSON.stringify({preview_evaluation_path:classification,
+            public_jmr_index_entries:index.entries.length,published_poems:j.poems.length,
+            method_guard:api.status,model_calls:0,private_content_printed:false,
+            cloudflare_api_writes:0,source_modifications:0}));
+          NODE
