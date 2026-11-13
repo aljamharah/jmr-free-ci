@@ -1,0 +1,97 @@
+name: Jamharah staging mobile and desktop browser smoke
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/staging-browser-smoke.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  live-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install test-only Playwright in disposable runner
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/jmr-browser"
+          cd "$RUNNER_TEMP/jmr-browser"
+          npm install --no-audit --no-fund --no-save --package-lock=false playwright@1.56.1
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            npx playwright install chromium
+          fi
+      - name: Check real staging navigation, theme and responsive layout
+        shell: bash
+        env:
+          TARGET: https://aljamharah-staging.pages.dev
+        run: |
+          cd "$RUNNER_TEMP/jmr-browser"
+          node --input-type=module <<'NODE'
+          import { chromium } from "playwright";
+          const origin = new URL(process.env.TARGET);
+          if (origin.origin !== "https://aljamharah-staging.pages.dev") throw Error("Unexpected origin");
+          const paths = ["index.html","lexicon.html","poem.html","jmr.html"];
+          let pass = 0, fail = 0;
+          const failures = [];
+          let browser;
+          function check(value, label) {
+            if (value) pass++;
+            else { fail++; failures.push(label); }
+            console.log("BROWSER_CHECK " + label + " " + (value ? "PASS" : "FAIL"));
+          }
+          try {
+            try { browser = await chromium.launch({channel:"chrome",headless:true,args:["--no-sandbox"]}); }
+            catch { browser = await chromium.launch({headless:true,args:["--no-sandbox"]}); }
+            for (const width of [390,1280]) {
+              const context = await browser.newContext({viewport:{width,height:844}, locale:"ar",reducedMotion:"reduce"});
+              await context.route("**/*",route => {
+                const host=new URL(route.request().url()).hostname;
+                return host==="aljamharah-staging.pages.dev" ? route.continue():route.abort();
+              });
+              for (const path of paths) {
+                const page=await context.newPage();
+                const errors=[];
+                page.on("pageerror",e=>errors.push(e.message));
+                const response=await page.goto(origin.origin+"/"+path,{waitUntil:"domcontentloaded",timeout:20000});
+                check(response?.status()===200,"status:"+path+"@"+width);
+                check((await page.title()).length>0,"title:"+path+"@"+width);
+                check(await page.locator("html").getAttribute("dir")==="rtl","rtl:"+path+"@"+width);
+                const overflow=await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth);
+                check(overflow<=6,"no-overflow:"+path+"@"+width);
+                if(path!=="jmr.html") {
+                  const menu=page.locator("#menuButton");
+                  check(await menu.count()===1,"menu-present:"+path+"@"+width);
+                  if(await menu.count()===1) {
+                    await menu.click({timeout:10000});
+                    check(await page.locator("#sidebar").evaluate(x=>x.classList.contains("open")),
+                      "menu-opens:"+path+"@"+width);
+                    await page.keyboard.press("Escape");
+                    check(!(await page.locator("#sidebar").evaluate(x=>x.classList.contains("open"))),
+                      "menu-esc:"+path+"@"+width);
+                  }
+                  const theme=page.locator("#themeButton");
+                  if(await theme.count()===1) {
+                    const before=await page.locator("body").evaluate(x=>x.classList.contains("light"));
+                    await theme.click({timeout:10000});
+                    const after=await page.locator("body").evaluate(x=>x.classList.contains("light"));
+                    check(before!==after,"theme:"+path+"@"+width);
+                  } else check(false,"theme-present:"+path+"@"+width);
+                } else {
+                  check(await page.locator("#askForm").count()===1,"jmr-form@"+width);
+                }
+                check(errors.length===0,"no-pageerror:"+path+"@"+width);
+                await page.close();
+              }
+              await context.close();
+            }
+          } finally { if(browser)await browser.close(); }
+          const summary="Staging browser smoke: pass "+pass+" fail "+fail+"; no JMR POST and no paid-model calls.\n"+
+            (failures.length?"Failures:\n"+failures.join("\n")+"\n":"All checks passed.\n");
+          if(process.env.GITHUB_STEP_SUMMARY) {
+            const {appendFileSync}=await import("node:fs");
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY,summary);
+          }
+          console.log("BROWSER_SUMMARY pass="+pass+" fail="+fail);
+          if(fail>0)process.exitCode=1;
+          NODE
