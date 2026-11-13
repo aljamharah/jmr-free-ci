@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 3c8f99d46ee7cbd461a6f6da944d7089759f2e1c
+          ref: 77dc8e2f58d9517643fb9801fa2b1ac4f84755af
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: baseline
@@ -51,19 +51,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C baseline rev-parse HEAD)" = "3c8f99d46ee7cbd461a6f6da944d7089759f2e1c"
+          test "$(git -C baseline rev-parse HEAD)" = "77dc8e2f58d9517643fb9801fa2b1ac4f84755af"
           test "$(git -C candidate rev-parse HEAD)" = "0611b2da7a17eeac669b19923dd4fbd3b68a39d8"
-          git -C candidate cat-file -e 3c8f99d46ee7cbd461a6f6da944d7089759f2e1c^{commit}
+          git -C candidate cat-file -e 77dc8e2f58d9517643fb9801fa2b1ac4f84755af^{commit}
           git -C candidate -c user.name='Read-only SEC01 Merge Probe' \
             -c user.email='ci@invalid.example' \
-            merge --no-ff --no-edit 3c8f99d46ee7cbd461a6f6da944d7089759f2e1c
+            merge --no-ff --no-edit 77dc8e2f58d9517643fb9801fa2b1ac4f84755af
           echo "Local disposable merge created, no branch write or push."
 
       - name: Require exactly three modified security audit files; forbid other source changes
         shell: bash
         run: |
           set -euo pipefail
-          git -C candidate diff --name-status 3c8f99d46ee7cbd461a6f6da944d7089759f2e1c HEAD > /tmp/sec01-changes.txt
+          git -C candidate diff --name-status 77dc8e2f58d9517643fb9801fa2b1ac4f84755af HEAD > /tmp/sec01-changes.txt
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import {readFileSync} from 'node:fs';
