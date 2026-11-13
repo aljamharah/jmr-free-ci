@@ -49,7 +49,7 @@ jobs:
             body:'{deliberately-invalid-json',
             signal:AbortSignal.timeout(16000)
           }).then(r=>({status:r.status,stage:r.headers.get('X-JMR-Rate-Limit-Stage')||''}))
-            .catch(()=>({status:0,stage:'network'}))));
+            .catch(()=>({status:0,stage:'network'})));
           const results=await Promise.all(tests);
           const afterMinute=Math.floor(Date.now()/60000);
           const counts={invalid_json_400:0,rate_limit_429:0,rate_limit_header:0,
