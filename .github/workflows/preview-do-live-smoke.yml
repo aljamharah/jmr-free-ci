@@ -28,9 +28,21 @@ jobs:
           const base = process.env.PINNED_PREVIEW;
           assert.match(base, /^https:\/\/[a-f0-9]{8}\.aljamharah\.pages\.dev$/);
           async function read(path) {
-            const r = await fetch(base + path, { redirect:'manual', signal:AbortSignal.timeout(18000) });
-            if (r.status >= 300 && r.status < 400) throw new Error('Unexpected redirect for '+path);
-            return r;
+            let url = new URL(path, base);
+            for (let hop = 0; hop < 3; hop++) {
+              const r = await fetch(url, { redirect:'manual', signal:AbortSignal.timeout(18000) });
+              if (r.status < 300 || r.status >= 400) return r;
+              const loc = r.headers.get('location');
+              if (!loc) throw new Error('Redirect missing Location for '+path);
+              const next = new URL(loc, url);
+              console.log('Preview redirect status='+r.status+' to host='+next.hostname+' path='+next.pathname);
+              if (next.protocol !== 'https:' || next.origin !== base ||
+                  next.username || next.password) {
+                throw new Error('Refusing cross-origin Preview redirect');
+              }
+              url = next;
+            }
+            throw new Error('Too many Preview redirects');
           }
           const page = await read('/jmr.html');
           assert.equal(page.status, 200, 'JMR Preview page');
