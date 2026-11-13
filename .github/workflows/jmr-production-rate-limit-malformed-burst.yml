@@ -1,0 +1,59 @@
+name: JMR Production bounded no-model rate-limit verification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/jmr-production-rate-limit-malformed-burst.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  read-only-signal:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Bounded 20-concurrent invalid-JSON POST; no model is invoked
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://aljamharah.pages.dev';
+          const before=await fetch(base+'/api/jmr',{method:'GET',redirect:'manual',
+            signal:AbortSignal.timeout(10000)});
+          if(before.status!==405)throw Error('JMR GET preflight unexpectedly differs from 405: '+before.status);
+          // All 20 requests contain deliberately invalid JSON. In source functions/api/jmr.js,
+          // rate-limit check executes BEFORE JSON.parse and the AI invocation happens much later.
+          const requests=20;
+          const epochMinute=Math.floor(Date.now()/60000);
+          const run=()=>fetch(base+'/api/jmr',{method:'POST',redirect:'manual',
+            headers:{'Content-Type':'application/json','Accept':'application/json'},
+            body:'{invalid-json',signal:AbortSignal.timeout(15000)}).then(r=>({
+              status:r.status,stage:r.headers.get('X-JMR-Rate-Limit-Stage')||'not_reported'
+            })).catch(()=>({status:0,stage:'network_failure'}));
+          const results=await Promise.all(Array.from({length:requests},()=>run()));
+          const nextMinute=Math.floor(Date.now()/60000);
+          const counts={bad_json_400:0,limited_429:0,unavailable_503:0,other:0,429_limit_stage:0};
+          for(const x of results){
+            if(x.status===400)counts.bad_json_400++;
+            else if(x.status===429){counts.limited_429++;if(x.stage==='limit')counts['429_limit_stage']++;}
+            else if(x.status===503)counts.unavailable_503++;
+            else counts.other++;
+          }
+          const sameMinute=epochMinute===nextMinute;
+          console.log(JSON.stringify({
+            test:'JMR malformed-POST concurrency (no AI call)',scope:'one GitHub runner IP',
+            sent:requests,same_utc_minute:sameMinute,
+            result:counts,production_limit_12_per_minute:'not_verified_until_checked',
+            no_ai_model_requested:true,no_tokens_or_sensitive_content_logged:true
+          },null,2));
+          if(!sameMinute)throw Error('Crossed minute boundary: inconclusive limit window');
+          if(counts.bad_json_400!==12||counts.limited_429!==8||counts['429_limit_stage']!==8||
+            counts.unavailable_503!==0||counts.other!==0){
+            throw Error('Unexpected 12/8 concurrency split; investigate real rate limit before accepting production');
+          }
+          console.log('PASS: 12 malformed requests admitted before parse; 8 rejected by rate limiter. No model API call.');
+          NODE
