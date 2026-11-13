@@ -1,0 +1,152 @@
+name: SEC01 live post-merge public JSON and book-rights security verification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sec01-post-merge-live-public-content-gate.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-production-public-content-json-guard
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read Cloudflare deployment SHA then GET public JSON and internal paths without logging bodies
+        env:
+          ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://aljamharah.pages.dev';
+          const account=process.env.ACCOUNT,token=process.env.TOKEN;
+          if(!/^[a-f0-9]{32}$/i.test(account||'')||!(token?.length>=12))
+            throw Error('Missing existing read-only Pages credential');
+          const expected='51859f4bf08c3fd05a973525807f2ef5cbc05760';
+          const api=await fetch('https://api.cloudflare.com/client/v4/accounts/'+account+
+            '/pages/projects/aljamharah',{method:'GET',redirect:'error',
+            headers:{Authorization:'Bearer '+token,Accept:'application/json'},
+            signal:AbortSignal.timeout(15000)});
+          if(!api.ok)throw Error('Unable to read production deployment metadata');
+          const envelope=await api.json().catch(()=>null);
+          if(envelope?.success!==true||
+             envelope.result?.canonical_deployment?.deployment_trigger?.metadata?.commit_hash!==expected||
+             envelope.result?.canonical_deployment?.latest_stage?.status!=='success')
+            throw Error('Canonical production SHA mismatch or deployment not successful');
+          async function get(path){
+            const url=new URL(path,base);
+            if(url.origin!==base)throw Error('Cross-origin request forbidden');
+            return fetch(url,{method:'GET',redirect:'manual',
+              headers:{Accept:'application/json,text/html'},signal:AbortSignal.timeout(15000)});
+          }
+          async function readBounded(r,max=1024*1024){
+            const length=Number(r.headers.get('content-length')||0);
+            if(!Number.isFinite(length)||length>max)throw Error('Public response exceeds audit bound');
+            if(!r.body)throw Error('Public response body unavailable');
+            let bytes=0;
+            const parts=[],reader=r.body.getReader();
+            while(true){
+              const x=await reader.read();
+              if(x.done)break;
+              bytes+=x.value.byteLength;
+              if(bytes>max){await reader.cancel();throw Error('Public response exceeds audit bound');}
+              parts.push(x.value);
+            }
+            const out=new Uint8Array(bytes);let pos=0;
+            for(const part of parts){out.set(part,pos);pos+=part.byteLength;}
+            return new TextDecoder().decode(out);
+          }
+          async function publicJson(path){
+            const r=await get(path);
+            if(r.status!==200)throw Error('Public JSON status '+r.status);
+            let data;
+            try{data=JSON.parse(await readBounded(r));}
+            catch{throw Error('Invalid public JSON response');}
+            return data;
+          }
+          const root=await get('/');
+          if(root.status!==200)throw Error('Canonical public root is unavailable');
+          const home=await readBounded(root);
+          const keyset=o=>Object.keys(o||{});
+          const BOOK_INDEX_FIELDS=new Set(['id','title','author','category','category_label',
+            'cover_url','publication_status','record','rights_label']);
+          const BOOK_RECORD_FIELDS=new Set([
+            'author','category','category_label','cover_url','description','download_allowed',
+            'edition','editor','external_embed_allowed','external_embed_only',
+            'external_embed_url','external_link_only','external_source_url','id','language',
+            'original_work_year','pages','pdf_url','private_pdf_available',
+            'private_text_available','publication_status','publication_year','publisher',
+            'read_only_delivery_pending','reading_allowed','rights_basis_verified',
+            'rights_label','rights_status','secondary_source_url','source',
+            'subcategories','tags','text_content','text_download_url','title']);
+          const rights=new Set(['public_domain','permission_granted']);
+          const nonempty=x=>typeof x==='string'&&x.trim().length>0;
+          const index=await publicJson('/content/books/index.json');
+          if(!Array.isArray(index.books)||index.books.length<1)
+            throw Error('Invalid published book index shape');
+          let bookCount=0;
+          for(const row of index.books){
+            if(!row||row.publication_status!=='published'||
+               keyset(row).some(k=>!BOOK_INDEX_FIELDS.has(k))||
+               typeof row.record!=='string'||
+               !/^content\/books\/records\/[a-z0-9][a-z0-9-]*\.json$/.test(row.record))
+              throw Error('Public book index has forbidden row or route');
+            const record=await publicJson('/'+row.record);
+            if(!record||record.publication_status!=='published'||
+               keyset(record).some(k=>!BOOK_RECORD_FIELDS.has(k)))
+              throw Error('Unapproved published book metadata');
+            const verified=record.rights_basis_verified===true&&rights.has(record.rights_status);
+            if(nonempty(record.text_content)&&(!verified||record.reading_allowed!==true))
+              throw Error('Unapproved full book text in public record');
+            if((nonempty(record.pdf_url)||nonempty(record.text_download_url))&&
+               (!verified||record.download_allowed!==true))
+              throw Error('Unapproved direct book download in public record');
+            bookCount++;
+          }
+          const poemData=await publicJson('/content/poems.json');
+          if(!Array.isArray(poemData.poems)||poemData.poems.length<1)
+            throw Error('Unexpected public poems schema');
+          const PUBLIC_POEM_FIELDS=new Set(['slug','title','poet_slug','era_id','collection_id',
+            'verse_count','poem_subject','poem_type','meter','rhyme_letter','source_reference',
+            'source_url','text_status','rights_status','publication_status','body']);
+          for(const p of poemData.poems){
+            if(!p||p.publication_status!=='published'||
+               keyset(p).some(k=>!PUBLIC_POEM_FIELDS.has(k))||
+               (nonempty(p.body)&&!(rights.has(p.rights_status)&&p.text_status==='local_text')))
+              throw Error('Unpublished or unapproved poem field or full text in public catalog');
+          }
+          const knowledge=await publicJson('/content/jmr/knowledge/index.json');
+          if(!Array.isArray(knowledge.entries))throw Error('Public JMR knowledge index missing');
+          let hiddenPaths=0;
+          for(const path of ['/content/jmr/knowledge/evaluations.json',
+                             '/database/schema.sql','/.github/workflows/validate-library.yml']){
+            const r=await get(path);
+            if([403,404].includes(r.status)){hiddenPaths++;continue;}
+            if(r.status!==200||!String(r.headers.get('content-type')||'').toLowerCase().includes('text/html'))
+              throw Error('Internal source path publicly reachable as non-homepage content');
+            const body=await readBounded(r);
+            if(body!==home)throw Error('Internal source route differs from public homepage fallback');
+            hiddenPaths++;
+          }
+          const guard=await get('/api/jmr');
+          if(guard.status!==405)throw Error('JMR GET method guard changed');
+          await guard.body?.cancel().catch(()=>{});
+          console.log(JSON.stringify({read_only:true,canonical_production_sha_verified:true,
+            index_published_books:index.books.length,records_checked:bookCount,
+            published_poem_count:poemData.poems.length,
+            public_knowledge_entries:knowledge.entries.length,
+            internal_routes_withheld: hiddenPaths,
+            jmr_get_method_guard_405:true,raw_response_bodies_logged:false,
+            private_identifiers_logged:false,cloudflare_writes:0,model_calls:0},null,2));
+          console.log('PASS: Current production exports only approved book/poem JSON and keeps tested private source paths withheld. No response text or secrets logged.');
+          NODE
