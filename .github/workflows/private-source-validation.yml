@@ -83,6 +83,14 @@ jobs:
           node scripts/audit_site_links.mjs
           node scripts/test_header_navigation.mjs
 
+      - name: Archive published-file inventory (paths, sizes, SHA-256 only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: jamharah-public-dist-inventory-2026-11-13
+          path: private-source/build-reports/dist-inventory.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Run private JMR API and Quran tests
         working-directory: private-source
         run: npm test
