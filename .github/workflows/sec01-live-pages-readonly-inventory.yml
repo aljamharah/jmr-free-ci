@@ -1,0 +1,108 @@
+name: SEC01 live Cloudflare Pages inventory - read only and redacted
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sec01-live-pages-readonly-inventory.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-live-pages-get-only
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate existing read-only credentials are configured
+        env:
+          ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CF_TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+          SOURCE_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          if [ -z "$ACCOUNT_ID" ] || [ -z "$CF_TOKEN" ] || [ -z "$SOURCE_TOKEN" ]; then
+            echo "::error::Missing existing Cloudflare read access or private source checkout credentials"
+            exit 1
+          fi
+          echo "Existing credentials present. Values withheld."
+
+      - name: Checkout exact reviewed SEC01 source revision read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 0dc44cbcd2b45ff75c0bf72d718a4a768dd89dc7
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Verify reviewed SHA (not branch latest)
+        run: |
+          test "$(git -C source rev-parse HEAD)" = "0dc44cbcd2b45ff75c0bf72d718a4a768dd89dc7"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify GET-only implementation and unit tests before contacting Cloudflare
+        working-directory: source
+        run: |
+          node --check scripts/security/audit-pages-deployments.mjs
+          node --test tests/sec01-readonly-deployments.test.mjs
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          import assert from 'node:assert/strict';
+          const code=readFileSync('scripts/security/audit-pages-deployments.mjs','utf8');
+          assert.ok(code.includes("method:'GET',redirect:'error'"));
+          assert.ok(code.includes("deletion_approved: false"));
+          console.log('GET-only and no-delete source contracts verified');
+          NODE
+
+      - name: Inventory both Cloudflare Pages projects and redact all details
+        working-directory: source
+        env:
+          CF_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CF_PAGES_READ_TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {inventoryPages} from './scripts/security/audit-pages-deployments.mjs';
+          const audit=await inventoryPages({
+            accountId:process.env.CF_ACCOUNT_ID,
+            token:process.env.CF_PAGES_READ_TOKEN
+          });
+          if(audit.complete_inventory!==true||audit.risk_assessed!==false)throw Error('Inventory did not complete safely');
+          if(audit.projects.length!==2||audit.projects.some(p=>!['aljamharah','aljamharah-staging'].includes(p.name)))throw Error('Unexpected project count');
+          if(audit.deployments.some(d=>d.deletion_approved!==false||d.exposure_status!=='NOT_TESTED'))throw Error('Unsafe inventory status');
+          const totals={};
+          for(const p of audit.projects) {
+            totals[p.name]={production:0,preview:0,success:0,other:0};
+          }
+          for(const d of audit.deployments) {
+            const row=totals[d.project];row[d.environment]++;
+            if(d.status==='success')row.success++;else row.other++;
+          }
+          console.log('SEC01 LIVE READ-ONLY INVENTORY COMPLETE (redacted counts only)');
+          console.log(JSON.stringify({
+            complete_inventory:true,total: audit.count,
+            projects: audit.projects.map(p=>({
+              name:p.name,production_branch:p.production_branch,
+              build_output_dir:p.build_output_dir,
+              environment_safety:p.deployment_safety,
+              counts:totals[p.name]
+            })),
+            protected_count:audit.deployments.filter(d=>d.protected_from_deletion).length,
+            exposure_status:'NOT_TESTED',
+            deletion_approved:false
+          },null,2));
+          console.log('No deployment URL or UUID, poem text, API response, binding ID, token, or historical content emitted or uploaded.');
+          NODE
+
+      - name: Confirm private source unchanged
+        working-directory: source
+        run: |
+          git diff --exit-code
+          echo "No Cloudflare POST/PATCH/DELETE, no deployment, no API model calls or artifact uploads."
