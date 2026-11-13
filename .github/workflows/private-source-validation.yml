@@ -95,6 +95,12 @@ jobs:
         working-directory: private-source
         run: npm test
 
+      - name: Run mobile and desktop real-browser regression with local public dist
+        working-directory: private-source
+        run: |
+          npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright
+          node scripts/test_browser_navigation.mjs
+
       - name: Build and validate published poet biographies
         working-directory: private-source
         run: |
