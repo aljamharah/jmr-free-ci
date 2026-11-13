@@ -1,0 +1,130 @@
+name: Architecture PR84 ephemeral merge and current-main parity probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/architecture-rebaseline-merge-probe.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-rebaseline-probe-2026-11-13
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require existing private Contents Read credential
+        env:
+          READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          if [ -z "$READ_TOKEN" ]; then
+            echo "::error::Missing read-only private source credential"
+            exit 1
+          fi
+
+      - name: Checkout latest reviewed main as isolated baseline
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 4e320f97792c14243232167e090e6179ff21f934
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+
+      - name: Checkout pinned PR84 head with history for local-only merge
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 847cae1968abb9fd1684fcae3cf1f2fe6f9d24ac
+          fetch-depth: 0
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+
+      - name: Reject moved baselines before a test
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "4e320f97792c14243232167e090e6179ff21f934"
+          test "$(git -C candidate rev-parse HEAD)" = "847cae1968abb9fd1684fcae3cf1f2fe6f9d24ac"
+          git -C candidate cat-file -e 4e320f97792c14243232167e090e6179ff21f934^{commit}
+          echo "Pinned commits exist. No GitHub branch will be modified."
+
+      - name: Produce ephemeral local merge; never push any commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C candidate -c user.name='Read-only CI Probe' -c user.email='ci@invalid.example' merge --no-ff --no-edit 4e320f97792c14243232167e090e6179ff21f934
+          echo "Created a merge commit only in this disposable runner checkout. No push is configured."
+
+      - name: Ensure virtual merge adds only the ten PR84 docs/tools/tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C candidate diff --name-status 4e320f97792c14243232167e090e6179ff21f934 HEAD > /tmp/architecture-changed-files.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const actual=readFileSync('/tmp/architecture-changed-files.txt','utf8').trim().split('\n').filter(Boolean).sort();
+          const paths=[
+            'docs/architecture/DIST-PARITY-GATE-2026-11-13-AR.md',
+            'docs/architecture/HANDOFF-2026-11-13-AR.md',
+            'docs/architecture/RELOCATION-DEPENDENCY-MATRIX-2026-11-13-AR.md',
+            'docs/architecture/RESTRUCTURE-SAFETY-BASELINE-2026-11-13-AR.md',
+            'docs/architecture/STATIC-ASSET-REFERENCE-AUDIT-2026-11-13-AR.md',
+            'scripts/validation/audit-static-asset-references.mjs',
+            'scripts/validation/compare-public-dist.mjs',
+            'tests/architecture-asset-references.test.mjs',
+            'tests/architecture-contract.test.mjs',
+            'tests/compare-public-dist.test.mjs'
+          ].map(path=>'A\t'+path).sort();
+          assert.deepEqual(actual,paths,'The virtual merge modified or deleted an existing main file');
+          console.log('Virtual merge diff: 10 additions and zero changes/deletions to main sources.');
+          NODE
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install open source test dependencies only
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+
+      - name: Run all architecture tests on latest-main virtual merge
+        working-directory: candidate
+        run: node --test tests/architecture-asset-references.test.mjs tests/architecture-contract.test.mjs tests/compare-public-dist.test.mjs
+
+      - name: Run full foundation regressions on the virtual merge
+        working-directory: candidate
+        run: node scripts/check_site_foundation.mjs
+
+      - name: Build current main and virtual merged candidate independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+
+      - name: Require 100-percent identical published static dist paths and bytes
+        working-directory: candidate
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../baseline/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json
+
+      - name: Confirm tests did not alter any tracked private source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          echo "All source files clean. No push, PR merge, Cloudflare writes, deployments, AI requests or artifact uploads."
