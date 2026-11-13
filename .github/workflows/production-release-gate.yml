@@ -20,6 +20,9 @@ jobs:
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: source
           persist-credentials: false
+      - name: "Record verified private-source revision only"
+        working-directory: source
+        run: git rev-parse HEAD
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -108,6 +111,26 @@ jobs:
             console.log("PUBLIC_PRIVACY "+path+" safe="+safe);
             if(!safe)process.exitCode=1;
           }
+          // J-07 + poem-font regression: probe deployed content without external model calls.
+          const poemResponse=await get("/poem.html");
+          const poemFontSafe=poemResponse.status===200 &&
+            !poemResponse.body.includes('src:url("assets/sultani-hadith.woff2")');
+          console.log("PUBLIC_POEM_FONT_NO_MISSING_ASSET="+poemFontSafe);
+          if(!poemFontSafe)process.exitCode=1;
+          const settingsResponse=await get("/content/settings/site.json");
+          let privacyDraftSafe=false;
+          if(settingsResponse.status===200){
+            try {
+              const policy=JSON.parse(settingsResponse.body).privacy_policy;
+              privacyDraftSafe=typeof policy==="string" &&
+                policy.startsWith("مسودة") &&
+                policy.includes("GPS") &&
+                policy.includes("AlAdhan") &&
+                policy.includes("jamharah-prayer-location-v1");
+            } catch(_error) {}
+          }
+          console.log("PUBLIC_PRIVACY_DISCLOSURE_DRAFT="+privacyDraftSafe);
+          if(!privacyDraftSafe)process.exitCode=1;
           const api=await get("/api/jmr");
           console.log("PUBLIC_API_GET 405="+(api.status===405));
           if(api.status!==405)process.exitCode=1;
