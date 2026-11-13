@@ -44,9 +44,17 @@ jobs:
           const base='d082d32b7288232d83d1ad0d05ecbf0473aeeea2',head='81871d8e7dfe84a58aa25cdc45683e39e746308a';
           const expected=['README.md','docs/PROJECT-COMMAND-CENTER-AR.md',
             'docs/PROJECT-PERSONAL-PURPOSE-AR.md'].sort();
-          // This is a pinned two-commit diff in the candidate repository.
-          const paths=execFileSync('git',['-C','candidate','diff','--name-only',base,head],
-            {encoding:'utf8'}).trim().split('\n').filter(Boolean).sort();
+          // Independent shallow checkouts have no shared commit ancestry.
+          // Compare Git blob identities from both pinned trees instead of git diff.
+          const tree=dir=>new Map(execFileSync('git',['-C',dir,'ls-tree','-r','HEAD'],
+            {encoding:'utf8'}).trim().split('\n').filter(Boolean).map(line=>{
+              const m=line.match(/^100644 blob ([0-9a-f]{40})\t(.+)$/);
+              assert.ok(m,'Unexpected Git blob tree entry');
+              return [m[2],m[1]];
+            }));
+          const before=tree('baseline'),after=tree('candidate');
+          const paths=[...new Set([...before.keys(),...after.keys()])]
+            .filter(p=>before.get(p)!==after.get(p)).sort();
           assert.deepEqual(paths,expected);
           const body=readFileSync('candidate/docs/PROJECT-PERSONAL-PURPOSE-AR.md','utf8');
           assert.match(body,/هاوٍ ومدوّن/);
