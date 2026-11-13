@@ -36,7 +36,7 @@ jobs:
             })).catch(()=>({status:0,stage:'network_failure'}));
           const results=await Promise.all(Array.from({length:requests},()=>run()));
           const nextMinute=Math.floor(Date.now()/60000);
-          const counts={bad_json_400:0,limited_429:0,unavailable_503:0,other:0,429_limit_stage:0};
+          const counts={bad_json_400:0,limited_429:0,unavailable_503:0,other:0,'429_limit_stage':0};
           for(const x of results){
             if(x.status===400)counts.bad_json_400++;
             else if(x.status===429){counts.limited_429++;if(x.stage==='limit')counts['429_limit_stage']++;}
