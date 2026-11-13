@@ -1,0 +1,79 @@
+name: JMR exact-production SHA safe 13 concurrent invalid JSON rate limit proof
+on:
+  push:
+    branches: [ci/jmr-prod-13-invalid-atomic-proof-20261113]
+permissions:
+  contents: read
+jobs:
+  proof:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Revalidate Cloudflare production SHA and single free-tier safety burst
+        env:
+          ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const expected='6ba516709ce090068ceac32a4faac5868a44e434';
+          const account=process.env.ACCOUNT, token=process.env.TOKEN;
+          assert.match(account||'',/^[a-f0-9]{32}$/i,'Missing account id');
+          assert.ok(token?.length>=12,'Missing read credential');
+          const api='https://api.cloudflare.com/client/v4/accounts/'+account+
+            '/pages/projects/aljamharah/deployments?env=production&per_page=5&page=1';
+          async function gate(){
+            const r=await fetch(api,{method:'GET',redirect:'error',signal:AbortSignal.timeout(20000),
+              headers:{Authorization:'Bearer '+token,Accept:'application/json'}});
+            assert.equal(r.status,200,'Cannot verify live Pages revision');
+            const d=await r.json();
+            assert.equal(d.success,true);
+            const latest=d.result?.[0];
+            assert.equal(latest?.deployment_trigger?.metadata?.commit_hash,expected,
+              'Published Production SHA changed; do not run POST burst');
+            assert.equal(latest?.latest_stage?.status,'success',
+              'Published Production not healthy; do not run POST burst');
+          }
+          await gate();
+          const base='https://aljamharah.pages.dev/api/jmr';
+          const check=await fetch(base,{method:'GET',redirect:'manual',signal:AbortSignal.timeout(15000)});
+          assert.equal(check.status,405,'JMR method preflight failed');
+          await check.body?.cancel();
+          const now=Date.now()%60000;
+          if(now>45000)throw Error('Too close to minute rollover: no burst executed');
+          const minute=Math.floor(Date.now()/60000);
+          const tests=Array.from({length:13},()=>fetch(base,{
+            method:'POST',redirect:'manual',
+            headers:{'Content-Type':'application/json','Accept':'application/json'},
+            body:'{deliberately-invalid-json',
+            signal:AbortSignal.timeout(16000)
+          }).then(r=>({status:r.status,stage:r.headers.get('X-JMR-Rate-Limit-Stage')||''}))
+            .catch(()=>({status:0,stage:'network'}))));
+          const results=await Promise.all(tests);
+          const afterMinute=Math.floor(Date.now()/60000);
+          const counts={invalid_json_400:0,rate_limit_429:0,rate_limit_header:0,
+            unexpectedly_unavailable_503:0,other:0};
+          for(const x of results) {
+            if(x.status===400)counts.invalid_json_400++;
+            else if(x.status===429) {
+              counts.rate_limit_429++;if(x.stage==='limit')counts.rate_limit_header++;
+            } else if(x.status===503)counts.unexpectedly_unavailable_503++;
+            else counts.other++;
+          }
+          console.log(JSON.stringify({
+            scope:'single runner IP, one intentionally invalid JSON concurrency burst',
+            pinned_production_revision:expected.slice(0,12),
+            requests:13,same_minute:minute===afterMinute,
+            result:counts,ai_model_calls:0,
+            cloudflare_config_mutations:0,
+            no_raw_response_content_logged:true,no_tokens_logged:true
+          },null,2));
+          assert.equal(minute,afterMinute,'Minute boundary invalidates conclusion');
+          assert.deepEqual(counts,{
+            invalid_json_400:12,rate_limit_429:1,rate_limit_header:1,
+            unexpectedly_unavailable_503:0,other:0
+          },'Expected exactly 12 admission and one rate-limit rejection');
+          await gate();
+          console.log('JMR_PRODUCTION_DO_ATOMIC_GUARD=PASS 12/13 no AI inference');
+          NODE
