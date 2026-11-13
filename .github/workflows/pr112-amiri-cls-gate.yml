@@ -1,0 +1,128 @@
+name: PR112 exact source and poet CLS guard
+on:
+  push:
+    branches: [ci/pr112-amiri-cls-gate-20261113]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 6ba516709ce090068ceac32a4faac5868a44e434
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: baseline
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 532eb9c9b0ff13d88788d9f3a23b8e1c2ca98461
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: candidate
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and verify candidate source
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "6ba516709ce090068ceac32a4faac5868a44e434"
+          test "$(git -C candidate rev-parse HEAD)" = "532eb9c9b0ff13d88788d9f3a23b8e1c2ca98461"
+          python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/check_site_foundation.mjs && node scripts/build_public_site.mjs && npm test)
+      - name: Exact full dist parity except single preloaded font hint
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from hashlib import sha256
+          def inventory(root):
+              return {str(p.relative_to(root)):sha256(p.read_bytes()).hexdigest() for p in root.rglob("*") if p.is_file()}
+          before=inventory(Path("baseline/dist"))
+          after=inventory(Path("candidate/dist"))
+          assert before.keys()==after.keys(), "Public file paths changed"
+          changes=[p for p in before if before[p]!=after[p]]
+          assert changes==["poets.html"],f"Unexpected output changes: {changes[:10]}"
+          a=Path("baseline/dist/poets.html").read_text()
+          b=Path("candidate/dist/poets.html").read_text()
+          addition='<!-- Same Arabic Amiri subset already requested by Google Fonts CSS: early fetch prevents font-swap layout shift. -->\n<link rel="preload" href="https://fonts.gstatic.com/s/amiri/v30/J7aRnpd8CGxBHpUrtLMA7w.woff2" as="font" type="font/woff2" crossorigin="anonymous">\n'
+          assert b.replace(addition,"")==a,"Loaded HTML markup changed beyond requested font hint"
+          print(f"DIST_PARITY PASS files={len(before)} sole_change=poets.html verified_preload=yes")
+          PY
+      - name: Install offline Chromium browser harness
+        run: npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright
+      - name: All standard browser regressions
+        working-directory: candidate
+        run: node scripts/test_browser_navigation.mjs
+      - name: Compare original and proposed pages in cold real Chrome
+        run: |
+          node --input-type=module <<'NODE'
+          import {chromium} from "playwright";
+          import {createServer} from "node:http";
+          import {readFile} from "node:fs/promises";
+          import {resolve,extname,sep} from "node:path";
+          import assert from "node:assert/strict";
+          const mime={".html":"text/html; charset=utf-8",".css":"text/css; charset=utf-8",".js":"text/javascript; charset=utf-8",".json":"application/json; charset=utf-8",".woff2":"font/woff2",".png":"image/png",".webp":"image/webp",".svg":"image/svg+xml"};
+          async function server(root){
+            const folder=resolve(root);
+            const http=createServer(async(req,res)=>{
+              const loc=new URL(req.url||"/","http://localhost");
+              const path=resolve(folder,decodeURIComponent(loc.pathname).replace(/^\/+/,"")||"index.html");
+              if(!path.startsWith(folder+sep)){res.writeHead(403);res.end();return;}
+              try{const data=await readFile(path);res.setHeader("Content-Type",mime[extname(path)]||"application/octet-stream");res.end(data);}
+              catch{res.writeHead(404);res.end();}
+            });
+            await new Promise(r=>http.listen(0,"127.0.0.1",r));
+            return {http,url:"http://127.0.0.1:"+http.address().port};
+          }
+          const left=await server("baseline/dist"),right=await server("candidate/dist");
+          let browser;
+          try{browser=await chromium.launch({channel:"chrome",headless:true,args:["--no-sandbox"]})}
+          catch{browser=await chromium.launch({headless:true,args:["--no-sandbox"]})}
+          try{
+            const results={baseline:[],candidate:[]};
+            for(let i=0;i<3;i++)for(const [label,site] of [["baseline",left],["candidate",right]]){
+              const context=await browser.newContext({viewport:{width:390,height:844},locale:"ar",reducedMotion:"reduce"});
+              await context.route("**/*",r=>r.request().method()==="GET"?r.continue():r.abort());
+              const page=await context.newPage(),errors=[];
+              page.on("pageerror",e=>errors.push(e.message));
+              await page.addInitScript(()=>{
+                window.__cls=0;
+                new PerformanceObserver(list=>{for(const entry of list.getEntries())if(!entry.hadRecentInput)window.__cls+=entry.value;}).observe({type:"layout-shift",buffered:true});
+              });
+              const response=await page.goto(site.url+"/poets.html",{waitUntil:"load",timeout:50000});
+              await page.waitForTimeout(900);
+              const result=await page.evaluate(()=>({
+                cls:+window.__cls.toFixed(4),
+                introHeight:Math.round(document.querySelector(".intro").getBoundingClientRect().height),
+                cards:document.querySelectorAll("#cards .card").length,
+                scrollWidth:document.documentElement.scrollWidth,
+                statusHidden:document.querySelector("#status").hidden
+              }));
+              assert.equal(response.status(),200);
+              assert.equal(result.cards,11);
+              assert.equal(result.scrollWidth,390);
+              assert.equal(errors.length,0);
+              results[label].push(result);
+              console.log("POETS_EXACT_CLS "+JSON.stringify({variant:label,run:i,...result}));
+              await context.close();
+            }
+            const avg=arr=>arr.reduce((n,x)=>n+x.cls,0)/arr.length;
+            const before=avg(results.baseline),after=avg(results.candidate);
+            assert.ok(results.candidate.every((x,i)=>x.introHeight===results.baseline[i].introHeight&&x.statusHidden),"Final layout differs");
+            assert.ok(before>=0.08,"Baseline CLS too low: repeat controlled test");
+            assert.ok(after<before*0.5,"Preload did not reduce CLS by at least 50 percent");
+            console.log("POETS_EXACT_CLS_GATE PASS before="+before.toFixed(4)+" after="+after.toFixed(4)+" reduction="+Math.round((1-after/before)*100)+"%");
+          }finally{await browser.close();await Promise.all([left,right].map(x=>new Promise(r=>x.http.close(r))));}
+          NODE
