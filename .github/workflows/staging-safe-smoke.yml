@@ -1,0 +1,96 @@
+name: Jamharah staging safe live smoke (GET only)
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/staging-safe-smoke.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 * * *"
+permissions:
+  contents: read
+concurrency:
+  group: jamharah-staging-safe-smoke
+  cancel-in-progress: true
+jobs:
+  staging-http:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      STAGING_ORIGIN: https://aljamharah-staging.pages.dev
+    steps:
+      - name: Probe public staging HTML, method guard and private-file exposure without model calls
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const origin = new URL(process.env.STAGING_ORIGIN);
+          if (origin.protocol !== "https:" || origin.hostname !== "aljamharah-staging.pages.dev") {
+            throw new Error("Unsafe staging origin");
+          }
+          let failures = 0, passes = 0;
+          const report = [];
+          async function get(path) {
+            const url = new URL(path, origin);
+            const response = await fetch(url, { method: "GET", redirect: "follow",
+              signal: AbortSignal.timeout(20000),
+              headers: { "Accept": "text/html,application/json;q=0.9,*/*;q=0.8" } });
+            const body = await response.text();
+            return { status: response.status, contentType: response.headers.get("content-type") || "", body };
+          }
+          function record(name, ok, status) {
+            report.push({ name, ok, status });
+            console.log("STAGING_CHECK " + name + " " + (ok ? "PASS" : "FAIL") + " HTTP=" + status);
+            if (ok) passes++; else failures++;
+          }
+          const html = [
+            "/index.html", "/catalog.html", "/lexicon.html", "/library.html",
+            "/book.html", "/reader.html", "/poets.html", "/poet.html",
+            "/poem.html", "/search.html", "/jmr.html"
+          ];
+          for (const path of html) {
+            try {
+              const r = await get(path);
+              const ok = r.status === 200 && r.contentType.includes("text/html") &&
+                /<!doctype html|<html[\s>]/i.test(r.body);
+              record("public-page:" + path, ok, r.status);
+            } catch (e) { record("public-page:" + path, false, "network-error"); }
+          }
+          try {
+            const r = await get("/api/jmr");
+            record("api-get-method-not-allowed", r.status === 405, r.status);
+          } catch (e) { record("api-get-method-not-allowed", false, "network-error"); }
+          for (const path of ["/package.json", "/.github/workflows/validate-library.yml",
+                              "/functions/api/jmr.js", "/scripts/build_public_site.mjs"]) {
+            try {
+              const r = await get(path);
+              record("sensitive-file:" + path, r.status === 403 || r.status === 404, r.status);
+            } catch (e) { record("sensitive-file:" + path, false, "network-error"); }
+          }
+          for (const path of ["/content/poems.json", "/content/poems%2Ejson"]) {
+            try {
+              const r = await get(path);
+              let safe = r.status === 403 || r.status === 404;
+              if (r.status === 200 && r.contentType.includes("application/json")) {
+                try {
+                  const data = JSON.parse(r.body);
+                  safe = Array.isArray(data?.poems) && data.poems.length > 0 &&
+                    data.poems.every(p => p.publication_status === "published" &&
+                      !["rights_basis", "text_attribution", "editorial_note", "editorial_token"].some(k =>
+                        Object.prototype.hasOwnProperty.call(p, k)));
+                } catch (_) { safe = false; }
+              }
+              record("poem-data-public-only:" + path, safe, r.status);
+            } catch (e) { record("poem-data-public-only:" + path, false, "network-error"); }
+          }
+          const summary = "# Jamharah staging HTTP smoke\n\n" +
+            "- Origin: " + origin.origin + "\n" +
+            "- Mode: public GET only; no model calls or private repository checkout\n" +
+            "- Checks passed: " + passes + "/" + report.length + "\n" +
+            "- Failed: " + failures + "\n\n" +
+            "| Check | Result | HTTP status |\n|---|---|---|\n" +
+            report.map(x => "| " + x.name + " | " + (x.ok ? "PASS" : "FAIL") + " | " + x.status + " |").join("\n") + "\n";
+          const {appendFileSync} = await import("node:fs");
+          if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+          console.log("STAGING_SUMMARY pass=" + passes + " total=" + report.length + " fail=" + failures);
+          if (failures > 0) process.exitCode = 1;
+          NODE
