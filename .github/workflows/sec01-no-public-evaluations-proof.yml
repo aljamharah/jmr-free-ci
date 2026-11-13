@@ -1,0 +1,141 @@
+name: SEC01 PR103 internal-evaluation dist exclusion exact-SHA regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sec01-no-public-evaluations-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec01-no-public-evaluations-proof-2026-11-13
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require existing private source read-only credential
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Private repository read-only credential missing"
+            exit 1
+          fi
+
+      - name: Checkout latest reviewed production source read only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: dea3e845c2e089b41a533c673587408d2ae1ab57
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+
+      - name: Checkout pinned SEC01 PR103 candidate with read-only history
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 28a8a1d45f47ce50a33c139f213c0e34cea76a33
+          fetch-depth: 0
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+
+      - name: Check exact SHA and produce disposable local merge, never push
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "dea3e845c2e089b41a533c673587408d2ae1ab57"
+          test "$(git -C candidate rev-parse HEAD)" = "28a8a1d45f47ce50a33c139f213c0e34cea76a33"
+          git -C candidate cat-file -e dea3e845c2e089b41a533c673587408d2ae1ab57^{commit}
+          git -C candidate -c user.name='Read-only SEC01 Merge Probe' \
+            -c user.email='ci@invalid.example' \
+            merge --no-ff --no-edit dea3e845c2e089b41a533c673587408d2ae1ab57
+          echo "Local disposable merge created, no branch write or push."
+
+      - name: Forbid changes except the two reviewed build and test paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C candidate diff --name-status dea3e845c2e089b41a533c673587408d2ae1ab57 HEAD > /tmp/sec01-changes.txt
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const actual=readFileSync('/tmp/sec01-changes.txt','utf8')
+            .trim().split('\n').filter(Boolean).sort();
+          const expected=[
+            'M\tscripts/build_public_site.mjs',
+            'M\tscripts/test_public_site_build.mjs'
+          ].sort();
+          assert.deepEqual(actual,expected);
+          console.log('Only two reviewed build/test source paths changed; no CMS modifications.');
+          NODE
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install free foundation test dependencies only
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+
+      - name: Verify public builder syntax and exclusion regression
+        working-directory: candidate
+        run: |
+          node --check scripts/build_public_site.mjs
+          node scripts/test_public_site_build.mjs
+
+      - name: Run complete foundation regressions for virtual merge
+        working-directory: candidate
+        run: node scripts/check_site_foundation.mjs
+
+      - name: Independently build static publish assets from each reviewed tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+
+      - name: Require only removal of one internal evaluation dataset from static dist
+        working-directory: candidate
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const read=p=>JSON.parse(readFileSync(p,'utf8'));
+          const a=read('../baseline/build-reports/dist-inventory.json');
+          const b=read('build-reports/dist-inventory.json');
+          const before=new Map(a.files.map(f=>[f.path,f]));
+          const after=new Map(b.files.map(f=>[f.path,f]));
+          assert.equal(before.size,a.count);
+          assert.equal(after.size,b.count);
+          assert.deepEqual([...before.keys()].filter(p=>!after.has(p)),
+            ['content/jmr/knowledge/evaluations.json']);
+          assert.deepEqual([...after.keys()].filter(p=>!before.has(p)),[]);
+          for(const [path,old] of before){
+            if(path==='content/jmr/knowledge/evaluations.json')continue;
+            const now=after.get(path);
+            assert.ok(now,'Missing required public asset');
+            assert.equal(now.sha256,old.sha256,'Unexpected published bytes at '+path);
+            assert.equal(now.bytes,old.bytes,'Unexpected published file size at '+path);
+          }
+          assert.equal(b.count,a.count-1);
+          console.log('Strict SEC01 published assets gate passed: one internal evaluation JSON removed; all remaining public asset paths and bytes unchanged.');
+          NODE
+
+      - name: No tracked changes, secrets or production resource writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          echo "Read-only source gate complete; no Cloudflare calls, deploy, branch write, model call, deletions or artifacts."
