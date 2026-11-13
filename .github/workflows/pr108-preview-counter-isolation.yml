@@ -1,0 +1,64 @@
+name: PR108 exact SHA isolated DO counter regression
+on:
+  push:
+    branches: [ci/pr108-preview-counter-isolation-2026-11-13]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.actor == 'aljamharah' && github.ref == 'refs/heads/ci/pr108-preview-counter-isolation-2026-11-13'
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify private source read-only token available
+        env:
+          PRIVATE_REPO_READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          test -n "$PRIVATE_REPO_READ_TOKEN" || { echo "::error::Missing existing private source read-only token"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 38b737ddd6e31868919073e194eaf773da31e072
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - name: Confirm exact source head, no accidental ref drift
+        working-directory: source
+        run: test "$(git rev-parse HEAD)" = "38b737ddd6e31868919073e194eaf773da31e072"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate rate-counter environment isolation at exact SHA
+        working-directory: source
+        run: |
+          node --test tests/rate-limit.test.js
+          node --check functions/_lib/rate-limit.js
+      - name: Whole repository Node regression
+        working-directory: source
+        run: npm test
+      - name: Static build and invariant check (no cloud writes)
+        working-directory: source
+        run: |
+          python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+          node scripts/check_site_foundation.mjs
+          node scripts/build_public_site.mjs
+      - name: Real Chrome on offline production-equivalent dist
+        working-directory: source
+        run: |
+          npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright
+          node scripts/test_browser_navigation.mjs
+      - name: Real SQLite DO Vitest concurrency and expiry
+        working-directory: source/workers/jmr-ratelimit-do
+        run: |
+          npm install --no-audit --no-fund --legacy-peer-deps --package-lock=false
+          npm test
+      - name: Publish evidence summary
+        run: |
+          echo "PR108 exact SHA offline source/SQLite/Chromium checks passed. Existing canonical Production DO idFromName(ip) is unchanged; Preview uses preview:ip. No Cloudflare mutation, model inference, billing, or production HTTP write." >> "$GITHUB_STEP_SUMMARY"
