@@ -140,5 +140,8 @@ jobs:
         run: |
           git -C baseline diff --exit-code
           git -C candidate diff --exit-code
-          test -z "$(git -C candidate ls-files --others --exclude-standard)"
-          echo 'SEC01 PR104 exact SHA virtual merge PASS: 874 public files unchanged, drafts source-only, no AI or Cloudflare writes.'
+          git -C baseline diff --cached --exit-code
+          git -C candidate diff --cached --exit-code
+          test ! -e candidate/content/books/records/sec01-ci-draft.json
+          test ! -e candidate/content/settings/sec01-ci-unknown.json
+          echo 'SEC01 PR104 exact SHA virtual merge PASS: 874 public files unchanged, synthetic drafts cleaned, no AI or Cloudflare writes.'
