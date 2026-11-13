@@ -68,6 +68,12 @@ jobs:
       - name: Run explicit moved-test suite
         working-directory: candidate
         run: node --test tests/architecture/compare-public-dist.test.mjs
+      - name: Build two independent sanitized static dist trees
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
       - name: Compare complete baseline and candidate Node test discovery
         shell: bash
         run: |
@@ -102,12 +108,6 @@ jobs:
         run: |
           python scripts/validate_library.py
           python -m unittest discover -s tests -p 'test_*.py'
-      - name: Build two independent sanitized static dist trees
-        shell: bash
-        run: |
-          set -euo pipefail
-          (cd baseline && node scripts/build_public_site.mjs)
-          (cd candidate && node scripts/build_public_site.mjs)
       - name: Require identical public paths bytes and SHA256
         working-directory: candidate
         run: |
