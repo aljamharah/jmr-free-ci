@@ -1,0 +1,74 @@
+name: Preview JMR public safety and DO rate-limit smoke (no AI calls)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/preview-do-live-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-do-no-model-smoke
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Probe pinned architecture Preview without sending any valid model request
+        env:
+          PINNED_PREVIEW: https://04c7613d.aljamharah.pages.dev
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const base = process.env.PINNED_PREVIEW;
+          assert.match(base, /^https:\/\/[a-f0-9]{8}\.aljamharah\.pages\.dev$/);
+          async function read(path) {
+            const r = await fetch(base + path, { redirect:'manual', signal:AbortSignal.timeout(18000) });
+            if (r.status >= 300 && r.status < 400) throw new Error('Unexpected redirect for '+path);
+            return r;
+          }
+          const page = await read('/jmr.html');
+          assert.equal(page.status, 200, 'JMR Preview page');
+          const html = await page.text();
+          assert.ok(html.includes('id="askForm"'), 'Expected JMR chat form');
+          const guard = await read('/api/jmr');
+          assert.equal(guard.status, 405, 'GET /api/jmr must not call AI');
+          console.log('Preview JMR page 200; API method guard 405.');
+
+          const poems = await read('/content/poems.json');
+          if (poems.status === 200) {
+            const data = await poems.json();
+            assert.ok(Array.isArray(data.poems) && data.poems.length > 0, 'Missing public poems');
+            const banned = ['rights_basis','text_attribution','editorial_note','editorial_token','draft','internal_note'];
+            for (const p of data.poems) {
+              assert.equal(p.publication_status,'published','Unpublished poem exposed');
+              for (const key of banned) assert.ok(!Object.hasOwn(p,key),'Private poem field exposed');
+            }
+            console.log('Published poem metadata passes privacy check; records='+data.poems.length);
+          } else {
+            assert.ok([403,404].includes(poems.status), 'Unsafe poem catalog HTTP '+poems.status);
+            console.log('Poem catalog protected: HTTP '+poems.status);
+          }
+
+          // Deliberately malformed JSON: the API counts requests before JSON parsing,
+          // so allowed requests return 400 without calling Workers AI.
+          const statuses=[];
+          for(let i=0;i<13;i++){
+            const r=await fetch(base+'/api/jmr',{
+              method:'POST',headers:{'Content-Type':'application/json'},
+              body:'{',redirect:'manual',signal:AbortSignal.timeout(20000)
+            });
+            statuses.push(r.status);
+            if(i<12) assert.equal(r.status,400,'DO early rejection at request '+(i+1));
+            else {
+              assert.equal(r.status,429,'13th request must be throttled');
+              assert.equal(r.headers.get('X-JMR-Rate-Limit-Stage'),'limit','Expected explicit rate-limit stage');
+            }
+          }
+          console.log('Preview DO rate-limit: first 12 invalid JSON calls => 400; 13th => 429. No Workers AI calls.');
+          NODE
