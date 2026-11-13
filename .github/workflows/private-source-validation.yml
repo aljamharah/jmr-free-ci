@@ -58,7 +58,7 @@ jobs:
       - name: Confirm exact private branch revision
         working-directory: private-source
         run: |
-          test "$(git rev-parse HEAD)" = "efd2c106e4644c22b17aefbef072df75cb20cfe5"
+          test "$(git rev-parse HEAD)" = "a63a811880a94405260afa78cf76b31bae45ef17"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -146,14 +146,14 @@ jobs:
         working-directory: private-source/workers/jmr-ratelimit-do
         run: npm test
 
-      - name: Verify exact efd2c10 Cloudflare Preview (GET only, no AI usage)
+      - name: Verify exact a63a811 Cloudflare Preview (GET only, no AI usage)
         env:
-          JMR_PREVIEW_ORIGIN: https://463e1c39.aljamharah-staging.pages.dev
+          JMR_PREVIEW_ORIGIN: https://ea63d216.aljamharah-staging.pages.dev
         run: |
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
           const origin = process.env.JMR_PREVIEW_ORIGIN;
-          if (new URL(origin).hostname !== "463e1c39.aljamharah-staging.pages.dev") throw new Error("Unexpected Preview origin");
+          if (new URL(origin).hostname !== "ea63d216.aljamharah-staging.pages.dev") throw new Error("Unexpected Preview origin");
           const routes = [
             ["/",200],["/sitemap.xml",200],["/robots.txt",200],
             ["/search.html",200],["/jmr.html",200],["/content/poems.json",200],
