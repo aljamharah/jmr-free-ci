@@ -58,7 +58,7 @@ jobs:
       - name: Confirm exact private branch revision
         working-directory: private-source
         run: |
-          test "$(git rev-parse HEAD)" = "ddcdc6d247540aff581408d70eabd1ef56ea397e"
+          test "$(git rev-parse HEAD)" = "26850a92d90d8220680b4d4f946aa95bce608bb7"
 
       - name: Check out fixed main revision separately (read-only)
         uses: actions/checkout@v4
@@ -74,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C canonical-main rev-parse HEAD)" = "0bb1d8cba3f474daad64d43f731919364a444746"
-          test "$(git -C private-source rev-parse HEAD)" = "ddcdc6d247540aff581408d70eabd1ef56ea397e"
+          test "$(git -C private-source rev-parse HEAD)" = "26850a92d90d8220680b4d4f946aa95bce608bb7"
           git -C private-source fetch --no-tags ../canonical-main HEAD:refs/remotes/integration/main
           test "$(git -C private-source rev-parse refs/remotes/integration/main)" = "0bb1d8cba3f474daad64d43f731919364a444746"
           base="$(git -C private-source merge-base HEAD refs/remotes/integration/main)"
