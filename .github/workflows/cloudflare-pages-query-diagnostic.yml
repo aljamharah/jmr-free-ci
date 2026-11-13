@@ -43,11 +43,18 @@ jobs:
             const payload=await r.json().catch(()=>null);
             const info=payload?.result_info||{};
             const recordCount=Array.isArray(payload?.result)?payload.result.length:null;
+            const shape=Array.isArray(payload?.result)?{
+              missing_aliases:payload.result.filter(r=>!Object.hasOwn(r,'aliases')).length,
+              null_aliases:payload.result.filter(r=>r.aliases===null).length,
+              array_aliases:payload.result.filter(r=>Array.isArray(r.aliases)).length,
+              other_aliases:payload.result.filter(r=>r.aliases!==null&&r.aliases!==undefined&&!Array.isArray(r.aliases)).length,
+              null_urls:payload.result.filter(r=>r.url===null||r.url===undefined).length
+            }:null;
             if(r.ok&&payload?.success===true)valid++;
             console.log(JSON.stringify({
               parameters:params,status:r.status,success:payload?.success===true,
               error_code:Number.isInteger(payload?.errors?.[0]?.code)?payload.errors[0].code:null,
-              result_count:recordCount,
+              result_count:recordCount,shape,
               result_info_fields:Object.keys(info).sort(),
               pagination:{page:info.page??null,per_page:info.per_page??null,total_pages:info.total_pages??null}
             }));
