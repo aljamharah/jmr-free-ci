@@ -1,0 +1,61 @@
+name: SEC01 public content JSON allowlist exact revision and dist parity
+
+on:
+  push:
+    branches:
+      - ci/sec01-public-json-allowlist-20261113
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout pinned baseline using read-only credential
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: aad574cfa0e399f6aeffdd4c8b8cea2648652269
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+
+      - name: Checkout pinned candidate using read-only credential
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 18b0bd9e10a8c0e7a42d8e647bd4771eea1ef323
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Pin repository revisions
+        run: |
+          test "$(git -C before rev-parse HEAD)" = "aad574cfa0e399f6aeffdd4c8b8cea2648652269"
+          test "$(git -C after rev-parse HEAD)" = "18b0bd9e10a8c0e7a42d8e647bd4771eea1ef323"
+
+      - name: Run baseline build locally without publishing
+        working-directory: before
+        run: node scripts/build_public_site.mjs
+
+      - name: Run complete candidate foundation and security regression
+        working-directory: after
+        run: |
+          node scripts/check_site_foundation.mjs
+          node --test tests/public-content-export-policy.test.mjs
+
+      - name: Assert strict static dist byte and path parity
+        run: |
+          node after/scripts/validation/compare-public-dist.mjs before/build-reports/dist-inventory.json after/build-reports/dist-inventory.json
+
+      - name: Assert both checked-out Git worktrees unchanged
+        run: |
+          test -z "$(git -C before status --porcelain --untracked-files=no)"
+          test -z "$(git -C after status --porcelain --untracked-files=no)"
