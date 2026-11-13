@@ -30,6 +30,7 @@ jobs:
           source.load()
           assert source.format=="PNG"
           canvas=source.convert("RGBA")
+          canvas.thumbnail((1280,1280),Image.Resampling.LANCZOS)
           out=io.BytesIO()
           canvas.save(out,format="WEBP",lossless=True,method=6,exact=True)
           encoded=out.getvalue()
@@ -37,7 +38,7 @@ jobs:
           assert decoded.size==canvas.size
           assert ImageChops.difference(canvas,decoded).getbbox() is None,"Image pixel mismatch"
           print(f"LOGO_OPTIMIZE original_bytes={len(original)} optimized_bytes={len(encoded)} pixel_equal=yes original_sha1={actual_git_blob} width={canvas.width} height={canvas.height} format={source.mode}")
-          if len(encoded)>800000 or len(encoded)>.7*len(original):
+          if len(encoded)>650000 or len(encoded)>.7*len(original):
             print("LOGO_OPTIMIZE SKIP: optimized variant above target budget")
           else:
             print("START_LOSSLESS_LOGO_BASE64")
