@@ -33,6 +33,7 @@ jobs:
         with:
           repository: aljamharah/aljamharah
           ref: e68916ce9797360df5bd37596362b87beea98548
+          fetch-depth: 0
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: candidate
