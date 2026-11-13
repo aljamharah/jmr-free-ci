@@ -1,0 +1,129 @@
+name: PR110 exact-SHA library CLS comparison and browser regression
+on:
+  push:
+    branches: [ci/pr110-local-cls-comparison-20261113]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: a7e9db725e446911e4595364cdb863ece6d7d754
+          path: candidate
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 51859f4bf08c3fd05a973525807f2ef5cbc05760
+          path: baseline
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Confirm pinned baseline and candidate
+        run: |
+          test "$(git -C baseline rev-parse HEAD)" = "51859f4bf08c3fd05a973525807f2ef5cbc05760"
+          test "$(git -C candidate rev-parse HEAD)" = "a7e9db725e446911e4595364cdb863ece6d7d754"
+      - name: Build sanitized public dist in two isolated checkouts
+        run: |
+          (cd baseline && node scripts/build_public_site.mjs)
+          (cd candidate && node scripts/build_public_site.mjs)
+      - name: Whole candidate Node suite (built index available)
+        working-directory: candidate
+        run: npm test
+      - name: Install Chrome harness and test site behavior
+        working-directory: candidate
+        run: |
+          npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright
+          node scripts/test_browser_navigation.mjs
+      - name: Four cold Chrome 390px CLS runs, static hosted locally, no model calls
+        working-directory: candidate
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import {createServer} from "node:http";
+          import {createReadStream} from "node:fs";
+          import {stat} from "node:fs/promises";
+          import {resolve,extname,sep} from "node:path";
+          import {chromium} from "playwright";
+          const mime={".html":"text/html;charset=utf-8",".js":"text/javascript;charset=utf-8",".mjs":"text/javascript;charset=utf-8",".css":"text/css",".json":"application/json",".png":"image/png",".webp":"image/webp",".svg":"image/svg+xml"};
+          async function serve(root){
+            const server=createServer((req,res)=>{
+              let pathname;try{pathname=decodeURIComponent(new URL(req.url,"http://localhost").pathname)}catch{res.writeHead(400).end();return}
+              const file=resolve(root,"."+(pathname==="/"?"/index.html":pathname));
+              if(!file.startsWith(root+sep)){res.writeHead(403).end();return}
+              stat(file).then(st=>{
+                if(!st.isFile()){res.writeHead(404).end();return}
+                res.writeHead(200,{"content-type":mime[extname(file)]||"application/octet-stream","cache-control":"no-store"});
+                createReadStream(file).pipe(res);
+              }).catch(()=>res.writeHead(404).end());
+            });
+            return await new Promise(r=>server.listen(0,"127.0.0.1",()=>r({server,url:"http://127.0.0.1:"+server.address().port})));
+          }
+          const roots={
+            baseline:await serve(resolve("../baseline/dist")),
+            candidate:await serve(resolve("./dist"))
+          };
+          let browser;
+          try{browser=await chromium.launch({channel:"chrome",headless:true,args:["--no-sandbox"]})}
+          catch{browser=await chromium.launch({headless:true,args:["--no-sandbox"]})}
+          const results={baseline:[],candidate:[]};
+          try{
+            for(const name of ["baseline","candidate","candidate","baseline"]){
+              const context=await browser.newContext({viewport:{width:390,height:844},locale:"ar",reducedMotion:"reduce",colorScheme:"dark"});
+              await context.route("**/*",route=>route.request().method()==="GET"?route.continue():route.abort());
+              const page=await context.newPage();
+              await page.addInitScript(()=>{
+                window.__shifts=[];
+                new PerformanceObserver(list=>{
+                  for(const e of list.getEntries())if(!e.hadRecentInput)window.__shifts.push({v:e.value,at:e.startTime});
+                }).observe({type:"layout-shift",buffered:true});
+              });
+              const client=await context.newCDPSession(page);
+              await client.send("Network.enable");
+              await client.send("Network.setCacheDisabled",{cacheDisabled:true});
+              await client.send("Network.emulateNetworkConditions",{offline:false,latency:150,downloadThroughput:250000,uploadThroughput:125000});
+              await client.send("Emulation.setCPUThrottlingRate",{rate:4});
+              const response=await page.goto(roots[name].url+"/library.html",{waitUntil:"load",timeout:60000});
+              assert.equal(response.status(),200);
+              await page.locator("#categories .category").first().waitFor({timeout:12000});
+              await page.waitForTimeout(900);
+              const v=await page.evaluate(()=>{
+                const cat=document.querySelector("#categories");
+                const box=cat.getBoundingClientRect();
+                const cls=window.__shifts.reduce((n,e)=>n+e.v,0);
+                const naturalMin=getComputedStyle(cat).minHeight;
+                const children=[...cat.childNodes];cat.replaceChildren();
+                const reserve=parseFloat(getComputedStyle(cat).minHeight)||0;
+                cat.replaceChildren(...children);
+                return {cls:Number(cls.toFixed(4)),renderedCards:cat.children.length,
+                  loadedHeight:Math.round(box.height),reserve,naturalMin,
+                  overflow:Math.max(0,document.documentElement.scrollWidth-innerWidth)};
+              });
+              results[name].push(v);
+              console.log("CLS_LOCAL "+JSON.stringify({kind:name,...v}));
+              await context.close();
+            }
+            const avg=a=>a.reduce((s,v)=>s+v.cls,0)/a.length;
+            const before=avg(results.baseline),after=avg(results.candidate);
+            console.log("CLS_COMPARE "+JSON.stringify({before:Number(before.toFixed(4)),after:Number(after.toFixed(4)),runs:results}));
+            assert.ok(results.candidate.every(x=>x.renderedCards===6&&x.overflow===0&&x.reserve>=470&&x.naturalMin==="auto"),
+              "Transient reservation changed loaded cards/overflow or did not disappear after render");
+            assert.ok(Math.abs(results.candidate[0].loadedHeight-results.baseline[0].loadedHeight)<=2,
+              "Approved loaded grid geometry changed");
+            assert.ok(before>=0.06,"Baseline too low for meaningful CLS comparison; manual evaluation required");
+            assert.ok(after<=before*0.6,"No meaningful CLS improvement in controlled test");
+            console.log("CLS_IMPROVEMENT_GATE PASS no permanent visual changes; tested exact candidate SHA");
+          }finally{await browser.close();await Promise.all(Object.values(roots).map(o=>new Promise(r=>o.server.close(r))))}
+          NODE
