@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: aad574cfa0e399f6aeffdd4c8b8cea2648652269
+          ref: f931fbe536229517232d6eb1f3bc4cb498c9f4d5
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: baseline
           persist-credentials: false
@@ -50,12 +50,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C baseline rev-parse HEAD)" = "aad574cfa0e399f6aeffdd4c8b8cea2648652269"
+          test "$(git -C baseline rev-parse HEAD)" = "f931fbe536229517232d6eb1f3bc4cb498c9f4d5"
           test "$(git -C candidate rev-parse HEAD)" = "8f5cf57385b142be5e17d48cf1c9aeac69688440"
           test "$(git -C pr107 rev-parse HEAD)" = "987cab06a0ab6d43a31f553f46f08210f346a09f"
+          git -C candidate fetch --no-tags ../baseline f931fbe536229517232d6eb1f3bc4cb498c9f4d5
+          git -C candidate -c user.name='Disposable parity CI' -c user.email='ci@invalid.example' merge --no-ff --no-edit f931fbe536229517232d6eb1f3bc4cb498c9f4d5
           git -C candidate fetch --no-tags ../pr107 987cab06a0ab6d43a31f553f46f08210f346a09f
           git -C candidate -c user.name='Disposable parity CI' -c user.email='ci@invalid.example' merge --no-ff --no-edit 987cab06a0ab6d43a31f553f46f08210f346a09f
-          git -C candidate diff --name-status --no-renames aad574cfa0e399f6aeffdd4c8b8cea2648652269 HEAD > /tmp/two-pr-files.txt
+          git -C candidate diff --name-status --no-renames f931fbe536229517232d6eb1f3bc4cb498c9f4d5 HEAD > /tmp/two-pr-files.txt
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import {readFileSync} from 'node:fs';
@@ -76,13 +78,13 @@ jobs:
              '../scripts/security/audit-pages-deployments.mjs','../../scripts/security/audit-pages-deployments.mjs']
           ];
           for (const [from,to,oldImport,newImport] of checks) {
-            const orig=execFileSync('git',['-C','baseline','show','aad574cfa0e399f6aeffdd4c8b8cea2648652269:'+from],{encoding:'utf8'});
+            const orig=execFileSync('git',['-C','baseline','show','f931fbe536229517232d6eb1f3bc4cb498c9f4d5:'+from],{encoding:'utf8'});
             const moved=readFileSync('candidate/'+to,'utf8');
             assert.equal(orig.split(oldImport).length-1,1,'Unexpected original relative import count');
             assert.equal(moved,orig.replace(oldImport,newImport),'Test logic changed beyond import path');
           }
           const doc='docs/security/SEC01-READONLY-DEPLOYMENT-AUDIT-2026-11-13-AR.md';
-          const oldDoc=execFileSync('git',['-C','baseline','show','aad574cfa0e399f6aeffdd4c8b8cea2648652269:'+doc],{encoding:'utf8'});
+          const oldDoc=execFileSync('git',['-C','baseline','show','f931fbe536229517232d6eb1f3bc4cb498c9f4d5:'+doc],{encoding:'utf8'});
           const newDoc=readFileSync('candidate/'+doc,'utf8');
           assert.equal(newDoc,oldDoc.replace('tests/sec01-readonly-deployments.test.mjs',
             'tests/security/sec01-readonly-deployments.test.mjs'),'Documentation beyond test path changed');
