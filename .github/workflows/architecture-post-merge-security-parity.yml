@@ -42,7 +42,7 @@ jobs:
           set -euo pipefail
           test "$(git -C before rev-parse HEAD)" = "51859f4bf08c3fd05a973525807f2ef5cbc05760"
           test "$(git -C after rev-parse HEAD)" = "6ba516709ce090068ceac32a4faac5868a44e434"
-          git -C after fetch --no-tags --depth=15 origin 51859f4bf08c3fd05a973525807f2ef5cbc05760
+          git -C after fetch --no-tags ../before 51859f4bf08c3fd05a973525807f2ef5cbc05760
           git -C after diff --name-status --no-renames 51859f4bf08c3fd05a973525807f2ef5cbc05760 HEAD > /tmp/release-diff.txt
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
