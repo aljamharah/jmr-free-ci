@@ -21,7 +21,8 @@ jobs:
           from PIL import Image,ImageChops
           path="assets/AFF71118-81CC-48DF-A661-4410C687EC8F.png"
           url="https://aljamharah.pages.dev/"+path
-          original=urllib.request.urlopen(url,timeout=30).read()
+          req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 (compatible; JamharahAssetAudit/1.0)","Accept":"image/png,*/*"})
+          original=urllib.request.urlopen(req,timeout=30).read()
           actual_git_blob=hashlib.sha1(b"blob "+str(len(original)).encode()+b"\x00"+original).hexdigest()
           expected_git_blob="b955612f2c35dde01aa8b75c56807e8738d962e6"
           assert actual_git_blob==expected_git_blob,"Hosted logo does not match the official original Git blob"
