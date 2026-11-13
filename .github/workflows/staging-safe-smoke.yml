@@ -59,11 +59,25 @@ jobs:
             const r = await get("/api/jmr");
             record("api-get-method-not-allowed", r.status === 405, r.status);
           } catch (e) { record("api-get-method-not-allowed", false, "network-error"); }
+          // Some Pages deployments return a 200 HTML fallback for unknown paths.
+          // Compare with a definitely nonexistent canary before interpreting 200 as exposure.
+          let canary = null;
+          try {
+            canary = await get("/__jmr_nonexistent_guard_a27c9fa8e7.js");
+            console.log("STAGING_CANARY HTTP=" + canary.status + " html=" + canary.contentType.includes("text/html"));
+          } catch (e) { console.log("STAGING_CANARY network-error"); }
           for (const path of ["/package.json", "/.github/workflows/validate-library.yml",
                               "/functions/api/jmr.js", "/scripts/build_public_site.mjs"]) {
             try {
               const r = await get(path);
-              record("sensitive-file:" + path, r.status === 403 || r.status === 404, r.status);
+              const isHtml = r.contentType.includes("text/html") &&
+                /<!doctype html|<html[\s>]/i.test(r.body);
+              const matchesUnknownFallback = !!canary &&
+                r.status === canary.status && r.body === canary.body &&
+                isHtml && canary.contentType.includes("text/html");
+              const safe = r.status === 403 || r.status === 404 || matchesUnknownFallback;
+              record("sensitive-file:" + path, safe,
+                String(r.status) + " html=" + isHtml + " fallback=" + matchesUnknownFallback);
             } catch (e) { record("sensitive-file:" + path, false, "network-error"); }
           }
           for (const path of ["/content/poems.json", "/content/poems%2Ejson"]) {
