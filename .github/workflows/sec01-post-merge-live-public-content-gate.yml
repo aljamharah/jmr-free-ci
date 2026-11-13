@@ -1,4 +1,4 @@
-name: SEC01 live post-merge public JSON and book-rights security verification
+name: SEC01 PR109 production CMS settings and public-book security live GET gate
 
 on:
   push:
@@ -32,7 +32,7 @@ jobs:
           const account=process.env.ACCOUNT,token=process.env.TOKEN;
           if(!/^[a-f0-9]{32}$/i.test(account||'')||!(token?.length>=12))
             throw Error('Missing existing read-only Pages credential');
-          const expected='51859f4bf08c3fd05a973525807f2ef5cbc05760';
+          const expected='6ba516709ce090068ceac32a4faac5868a44e434';
           const api=await fetch('https://api.cloudflare.com/client/v4/accounts/'+account+
             '/pages/projects/aljamharah',{method:'GET',redirect:'error',
             headers:{Authorization:'Bearer '+token,Accept:'application/json'},
@@ -91,6 +91,20 @@ jobs:
             'subcategories','tags','text_content','text_download_url','title']);
           const rights=new Set(['public_domain','permission_granted']);
           const nonempty=x=>typeof x==='string'&&x.trim().length>0;
+          const site=await publicJson('/content/settings/site.json');
+          const SETTINGS_ALLOWED=new Set(['background','dark_mode','font','logo',
+            'primary_color','privacy_policy','search_indexing','secondary_color',
+            'site_description','site_name']);
+          if(!site||typeof site!=='object'||Array.isArray(site))
+            throw Error('Public site settings must be a flat JSON object');
+          const siteKeys=Object.keys(site);
+          if(siteKeys.length!==10 || siteKeys.some(k=>!SETTINGS_ALLOWED.has(k)))
+            throw Error('Unexpected public CMS settings fields');
+          for(const [k,v] of Object.entries(site)){
+            const expectedType=k==='dark_mode'||k==='search_indexing'?'boolean':'string';
+            if(typeof v!==expectedType)throw Error('Unexpected public CMS settings value type');
+          }
+          // Do not print public settings values or full source JSON.
           const index=await publicJson('/content/books/index.json');
           if(!Array.isArray(index.books)||index.books.length<1)
             throw Error('Invalid published book index shape');
@@ -142,6 +156,7 @@ jobs:
           if(guard.status!==405)throw Error('JMR GET method guard changed');
           await guard.body?.cancel().catch(()=>{});
           console.log(JSON.stringify({read_only:true,canonical_production_sha_verified:true,
+            site_settings_reviewed_keys:siteKeys.length,
             index_published_books:index.books.length,records_checked:bookCount,
             published_poem_count:poemData.poems.length,
             public_knowledge_entries:knowledge.entries.length,
