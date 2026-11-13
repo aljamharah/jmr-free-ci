@@ -1,4 +1,4 @@
-name: SEC01 bounded read-only historical Pages exposure sample
+name: SEC01 bounded read-only historical Pages exposure MIME classification
 
 on:
   push:
@@ -77,6 +77,15 @@ jobs:
             }
             return new TextDecoder().decode(Buffer.concat(chunks.map(c=>Buffer.from(c))));
           }
+          // Never print raw response headers: allow only fixed, non-identifying MIME categories.
+          function mimeClass(header) {
+            const mime=typeof header==='string'?header.split(';',1)[0].trim().toLowerCase():'';
+            if(mime==='text/html'||mime==='application/xhtml+xml')return 'html';
+            if(mime==='application/json'||mime.endsWith('+json'))return 'json';
+            if(mime==='text/plain')return 'plain';
+            if(mime==='application/octet-stream')return 'binary';
+            return mime?'other':'missing';
+          }
           async function probe(origin,path){
             let r;
             try{
@@ -89,7 +98,7 @@ jobs:
             try{raw=await readBounded(r)}catch{return 'unverified_body_read'}
             if(raw===null)return 'unverified_size_or_empty';
             let data;
-            try{data=JSON.parse(raw)}catch{return 'unverified_non_json'}
+            try{data=JSON.parse(raw)}catch{return 'unverified_non_json_'+mimeClass(r.headers.get('content-type'))}
             if(!data||!Array.isArray(data.poems)||data.poems.length===0)return 'unverified_schema';
             for(const row of data.poems) {
               if(!row||typeof row!=='object'||row.publication_status!=='published')return 'suspected_exposure';
