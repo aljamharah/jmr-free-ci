@@ -1,0 +1,70 @@
+name: J04 PR188 immutable offline D1 schema guard and rollback unit suite
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j04-pr188-live-schema-guard.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Require existing private read-only credential
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: test -n "$TOKEN" || { echo "::error::Private read credential unavailable"; exit 1; }
+      - name: Checkout exact private J04 candidate without persisting credential
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 527fb4d8aa3baf7e4b15537abbfa55d535b548ee
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: source
+      - name: Verify immutable candidate SHA
+        run: test "$(git -C source rev-parse HEAD)" = "527fb4d8aa3baf7e4b15537abbfa55d535b548ee"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify mismatch is BLOCKED and run four dedicated offline tests
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p test_j04_d1_live_schema_guard.py > "$RUNNER_TEMP/j04_schema_tests.log" 2>&1 ||
+            { echo "::error::Schema-guard unit test failure; private output withheld"; exit 1; }
+          python scripts/j04_d1_live_schema_guard.py --expect-blocked > "$RUNNER_TEMP/j04_guard.json" ||
+            { echo "::error::Unexpected D1 schema compatibility result"; exit 1; }
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          d=json.loads((Path(os.environ["RUNNER_TEMP"])/"j04_guard.json").read_text(encoding="utf8"))
+          assert d["compatible"] is False and d["production_cutover_authorized"] is False
+          assert d["remote_d1_writes"]==0 and len(d["blocking_issues"])>0
+          print("J04_LIVE_D1_SCHEMA_FAIL_CLOSED_PASS")
+          PY
+      - name: Run existing J04 deterministic rollback and pagination cases
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pattern in test_j04_d1_dry_run.py test_j04_transaction_rollback.py test_j04_public_read_pagination.py; do
+            python -m unittest discover -s tests -p "$pattern" > "$RUNNER_TEMP/j04_legacy_test.log" 2>&1 ||
+              { echo "::error::Existing J04 rollback/parity tests failed: $pattern"; exit 1; }
+            echo "J04_REVIEW_SUITE_PASS $pattern"
+          done
+      - name: Assert repository was not changed
+        run: |
+          git -C source diff --quiet
+          git -C source diff --cached --quiet
+          {
+            echo "### J04 immutable candidate safety gate"
+            echo "- Private candidate: 527fb4d8aa3baf7e4b15537abbfa55d535b548ee"
+            echo "- Known incompatible Cloudflare D1 schema: blocked by offline guard"
+            echo "- Four dedicated guard cases and existing J04 rollback/parity: PASS"
+            echo "- Remote D1 SQL/restore/binding/migration calls: NONE"
+            echo "- No private file contents, data rows or secrets emitted to public logs"
+            echo "- A green result does not approve production migration"
+          } >> "$GITHUB_STEP_SUMMARY"
