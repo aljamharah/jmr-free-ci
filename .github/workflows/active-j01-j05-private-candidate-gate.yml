@@ -1,0 +1,101 @@
+name: Active J01 J05 private candidate source and public-diff gate
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/active-j01-j05-private-candidate-gate.yml"
+permissions:
+  contents: read
+concurrency:
+  group: active-j01-j05-pinned-gate
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Require existing read-only private-source credential
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          test -n "$TOKEN" || { echo "::error::Read-only private token unavailable"; exit 1; }
+      - name: Checkout exact baseline SHA
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: b9e7b9efb5bf6431ba88f14aedc732282beea3cb
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 855c8a5328e410e2155ae2805bc93d614039029a
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+      - name: Pin and validate revision identities
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "b9e7b9efb5bf6431ba88f14aedc732282beea3cb"
+          test "$(git -C candidate rev-parse HEAD)" = "855c8a5328e410e2155ae2805bc93d614039029a"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install free standard source validators
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Validate full JMR and public site foundation with protected logs
+        working-directory: candidate
+        run: |
+          if node scripts/check_site_foundation.mjs > /tmp/j01_candidate_tests.log 2>&1; then
+            echo "J01_FULL_FOUNDATION_PASS"
+          else
+            echo "::error::Private source checks failed; logs withheld"
+            exit 1
+          fi
+      - name: Independently build baseline and candidate
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs > /tmp/j01_before.log 2>&1) ||
+            { echo "::error::Baseline build failed"; exit 1; }
+          (cd candidate && node scripts/build_public_site.mjs > /tmp/j01_after.log 2>&1) ||
+            { echo "::error::Candidate build failed"; exit 1; }
+      - name: Permit only one changed public search JS, no path/count differences
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          import {compareInventories} from './candidate/scripts/validation/compare-public-dist.mjs';
+          const before=JSON.parse(readFileSync('baseline/build-reports/dist-inventory.json','utf8'));
+          const after=JSON.parse(readFileSync('candidate/build-reports/dist-inventory.json','utf8'));
+          const diff=compareInventories(before,after);
+          if(diff.added.length!==0||diff.removed.length!==0||
+             diff.modified.length!==1||diff.modified[0].path!=='assets/jamharah-unified-search.mjs'||
+             diff.beforeCount!==diff.afterCount||diff.beforeCount<500){
+            throw Error('Unexpected public asset drift; private filenames withheld');
+          }
+          const changed=diff.modified[0];
+          if(changed.after.bytes>changed.before.bytes+2500){
+            throw Error('Unexpected public bundle size growth');
+          }
+          console.log('J01_DIFF_SAFE: exact one public JS changed, file count and paths preserved');
+          NODE
+      - name: Verify source unmodified and write confidential-safe summary
+        run: |
+          set -euo pipefail
+          git -C baseline diff --exit-code --quiet
+          git -C candidate diff --exit-code --quiet
+          {
+            echo "### J-01 repeated prefix request optimization (PR #122)"
+            echo "- Exact head/base SHA checked"
+            echo "- Complete site and Node test suite: PASS"
+            echo "- Public dist: only expected unified-search script changed"
+            echo "- Path count and all other static asset hashes unchanged"
+            echo "- No remote writes, D1, AI, private artifacts, or data values exposed"
+            echo "- Advisory test; inspect current Git refs and Preview before merge"
+          } >> "$GITHUB_STEP_SUMMARY"
