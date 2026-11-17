@@ -1,0 +1,145 @@
+name: J07 PR124 private source and local-only browser erasure verification
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j07-local-data-erasure-pr124-20261117.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check existing read-only private source credential
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: test -n "$TOKEN" || { echo "::error::Read-only credential missing"; exit 1; }
+      - name: Pin private main baseline at exact SHA
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 1f395362c9f07c5a636c5a9310d38f9618977260
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Pin PR124 candidate at exact SHA
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: b7c68993c9ce864ac4c5ab38cd5d53de6c838940
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+      - name: Verify pinned refs
+        run: |
+          test "$(git -C before rev-parse HEAD)" = "1f395362c9f07c5a636c5a9310d38f9618977260"
+          test "$(git -C after rev-parse HEAD)" = "b7c68993c9ce864ac4c5ab38cd5d53de6c838940"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install free validators and disposable browser
+        run: |
+          python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+          mkdir -p "$RUNNER_TEMP/j07-local-lab"
+          cd "$RUNNER_TEMP/j07-local-lab"
+          npm install --no-audit --no-fund --no-save --package-lock=false playwright@1.56.1 > /dev/null
+          if ! command -v google-chrome >/dev/null 2>&1; then npx playwright install chromium > /dev/null; fi
+      - name: Run all private source tests without printing source
+        working-directory: after
+        run: |
+          if node scripts/check_site_foundation.mjs >/tmp/j07-pr124-private-source.log 2>&1; then
+            echo "J07_FULL_SOURCE_PASS"
+          else
+            echo "::error::Private source validation failed, confidential log withheld"
+            exit 1
+          fi
+      - name: Build independent public dist before and after
+        run: |
+          (cd before && node scripts/build_public_site.mjs >/tmp/j07-before.log 2>&1) ||
+            { echo "::error::Before build failed"; exit 1; }
+          (cd after && node scripts/build_public_site.mjs >/tmp/j07-after.log 2>&1) ||
+            { echo "::error::After build failed"; exit 1; }
+      - name: Assert only privacy HTML changes in public dist
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          import {compareInventories} from './after/scripts/validation/compare-public-dist.mjs';
+          const before=JSON.parse(readFileSync('before/build-reports/dist-inventory.json','utf8'));
+          const after=JSON.parse(readFileSync('after/build-reports/dist-inventory.json','utf8'));
+          const result=compareInventories(before,after);
+          if(result.added.length||result.removed.length||
+             result.modified.length!==1||result.modified[0].path!=='privacy.html'||
+             result.beforeCount!==result.afterCount||result.beforeCount<500)
+              throw Error('Unexpected public dist file drift');
+          const item=result.modified[0];
+          if(item.after.bytes>item.before.bytes+4000)throw Error('Unexpected privacy page size growth');
+          console.log('J07_PUBLIC_DIFF_PASS one privacy HTML changed');
+          NODE
+      - name: Test erasure on actual browser with artificial GPS-only test data
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m http.server 8769 --bind 127.0.0.1 --directory after/dist >/tmp/j07-local-http.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          cd "$RUNNER_TEMP/j07-local-lab"
+          node --input-type=module <<'NODE'
+          import {chromium} from 'playwright';
+          import assert from 'node:assert/strict';
+          import {appendFileSync} from 'node:fs';
+          const origin='http://127.0.0.1:8769';
+          let browser;
+          try{
+            try{browser=await chromium.launch({channel:'chrome',headless:true,args:['--no-sandbox']});}
+            catch{browser=await chromium.launch({headless:true,args:['--no-sandbox']});}
+            const ctx=await browser.newContext({locale:'ar',viewport:{width:390,height:844}});
+            await ctx.route('**/*',route=>{
+              const req=route.request(),url=new URL(req.url());
+              return req.method()==='GET'&&url.origin===origin?route.continue():route.abort();
+            });
+            await ctx.addInitScript(()=>{
+              localStorage.setItem('jamharah-theme','light');
+              localStorage.setItem('jamharah-prayer-location-v1',
+                JSON.stringify({kind:'gps',latitude:1.234,longitude:5.678,label:'اختبار',method:3}));
+              localStorage.setItem('other-site-fixture','must-remain');
+            });
+            const page=await ctx.newPage();
+            const errors=[];
+            page.on('pageerror',e=>errors.push(e.message));
+            const resp=await page.goto(origin+'/privacy.html',{waitUntil:'domcontentloaded',timeout:25000});
+            assert.equal(resp?.status(),200);
+            assert.equal(await page.locator('#clearLocalJamharahSettings').count(),1);
+            assert.ok(await page.locator('body').evaluate(el=>el.classList.contains('light')));
+            await page.locator('#clearLocalJamharahSettings').click();
+            const state=await page.evaluate(()=>({
+              theme:localStorage.getItem('jamharah-theme'),
+              prayer:localStorage.getItem('jamharah-prayer-location-v1'),
+              other:localStorage.getItem('other-site-fixture'),
+              light:document.body.classList.contains('light'),
+              result:document.querySelector('#localDataStatus')?.textContent||''
+            }));
+            assert.equal(state.theme,null,'theme not erased');
+            assert.equal(state.prayer,null,'GPS/location fixture not erased');
+            assert.equal(state.other,'must-remain','unrelated data was incorrectly removed');
+            assert.equal(state.light,false,'visible light theme not reset');
+            assert.match(state.result,/حُذفت/);
+            await page.locator('#clearLocalJamharahSettings').click();
+            assert.match(await page.locator('#localDataStatus').textContent(),/لا توجد تفضيلات/);
+            assert.equal(errors.length,0,'privacy page uncaught JS error');
+            await ctx.close();
+            console.log('J07_ERASURE_BROWSER_PASS known_keys_deleted=2 unrelated_keys_preserved=1 clicks=2 errors=0');
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY,[
+              '### PR124 verified local browser erasure',
+              '- Exact private SHA full foundation: PASS',
+              '- Public dist diff: privacy.html only; no added/deleted public files',
+              '- Fake GPS location and theme erased using browser button; unrelated fixture key retained',
+              '- Repeat click truthful no-data feedback; RTL status updates; no page JS errors',
+              '- Only localhost GET, no external network, API, AI, Cloudflare mutation or user location',
+              '- This does NOT revoke geolocation permission or remove any third-party logs'
+            ].join('\n')+'\n');
+          }finally{if(browser)await browser.close();}
+          NODE
