@@ -1,0 +1,125 @@
+name: J04 current private main offline D1 migration/rollback readiness
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/j04-current-main-rollback-readiness.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: j04-offline-current-main-readiness
+  cancel-in-progress: false
+jobs:
+  offline:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 28
+    steps:
+      - name: Require existing restricted read-only private source token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          if [ -z "$PRIVATE_TOKEN" ]; then
+            echo '::error::Private source read-only credential missing'
+            exit 1
+          fi
+      - name: Read current private main without persistent credentials
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: main
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check initial migration/schema structural parity in independent SQLite memory databases
+        working-directory: source
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sqlite3
+          from pathlib import Path
+          a=Path('database/schema.sql').read_text(encoding='utf8')
+          b=Path('database/migrations/0001_initial.sql').read_text(encoding='utf8')
+          def objects(script):
+              db=sqlite3.connect(':memory:')
+              try:
+                  db.execute('PRAGMA foreign_keys=ON')
+                  db.executescript(script)
+                  assert db.execute('PRAGMA foreign_keys').fetchone()[0]==1
+                  return db.execute(
+                      "SELECT type,name,sql FROM sqlite_master "
+                      "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+                  ).fetchall()
+              finally:
+                  db.close()
+          assert objects(a)==objects(b),'Schema and migration 0001 differ'
+          print('J04_SCHEMA_MIGRATION_0001_PARITY_PASS')
+          PY
+      - name: Run current-source full rollback and rights tests in temporary SQLite memory
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pattern in test_j04_d1_dry_run.py test_j04_transaction_rollback.py test_j04_public_read_pagination.py; do
+            if python -m unittest discover -s tests -p "$pattern" > /tmp/j04_unit_private.log 2>&1; then
+              echo "J04_OFFLINE_UNIT_PASS $pattern"
+            else
+              echo "::error::Offline J04 unit checks failed: $pattern (private details withheld)"
+              exit 1
+            fi
+          done
+      - name: Reconcile all current JSON counts and ten lexicon shards without remote D1
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if python scripts/j04_d1_dry_run.py > /tmp/j04_isolated_results.json 2>/tmp/j04_isolated_private_error.log; then
+            echo 'J04_FULL_ROUNDTRIP_RUN_PASS'
+          else
+            echo '::error::Offline J04 full JSON/lexicon roundtrip failed (private log withheld)'
+            exit 1
+          fi
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('/tmp/j04_isolated_results.json').read_text(encoding='utf8'))
+          root=Path('.')
+          source={
+            'staged_poets':len(json.loads((root/'content/poets.json').read_text(encoding='utf8'))['poets']),
+            'staged_poems':len(json.loads((root/'content/poems.json').read_text(encoding='utf8'))['poems']),
+            'staged_books':len(json.loads((root/'content/books/index.json').read_text(encoding='utf8'))['books'])
+          }
+          for key,number in source.items():
+            if d.get(key)!=number:
+              raise SystemExit('J04 source count or roundtrip mismatch: '+key)
+          total=sum(source.values())
+          assert d.get('roundtrip_records_verified')==total,'Record roundtrip mismatch'
+          assert d.get('foreign_key_violations')==0,'Foreign-key violations'
+          assert d.get('sqlite_mode')=='memory_only_no_d1_access','Unexpected mode'
+          assert d.get('original_lexicon_parts_verified')==10,'Lexicon parts mismatch'
+          assert d.get('lexicon_entries_verified',0)>0,'Empty lexicon'
+          print('J04_CURRENT_SOURCE_PARITY_PASS source_records='+str(total)+
+            ' poets='+str(source['staged_poets'])+' poems='+str(source['staged_poems'])+
+            ' books='+str(source['staged_books'])+' lexicon_parts=10 fk_violations=0')
+          PY
+      - name: Confirm source is unchanged and issue conservative non-sensitive summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C source diff --exit-code --quiet
+          {
+            echo '### J04 current private main offline readiness (NO production D1 writes)'
+            echo "- Exact private source commit: $(git -C source rev-parse HEAD)"
+            echo '- 0001 migration and schema identical when compiled in SQLite: PASS'
+            echo '- All three J04 test suites, including late failure, outer transaction rollback and replay: PASS'
+            echo '- Full dynamic source counts, 10 lexicon shards, foreign-key checks: PASS'
+            echo '- Public keyset read-only pagination contract and rights suppression: PASS'
+            echo '- No Cloudflare API, no D1 query, no SQL mutation of a remote database, no Pages bindings'
+            echo '- No files, tokens, private source rows or logs uploaded as artifacts'
+            echo '- NOT approval to create schema or cut over production'
+          } >> "$GITHUB_STEP_SUMMARY"
