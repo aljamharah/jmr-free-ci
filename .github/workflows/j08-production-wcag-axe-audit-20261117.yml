@@ -1,0 +1,75 @@
+name: J08 production WCAG accessibility automated audit (public GET only)
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j08-production-wcag-axe-audit-20261117.yml"]
+permissions:
+  contents: read
+jobs:
+  audit:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - name: Install disposable Chromium and open-source axe-core
+        run: |
+          mkdir -p "$RUNNER_TEMP/j08-axe"
+          cd "$RUNNER_TEMP/j08-axe"
+          npm install --no-audit --no-fund --no-save --package-lock=false playwright@1.56.1 axe-core@4.10.3 > /dev/null
+          if ! command -v google-chrome >/dev/null 2>&1; then npx playwright install chromium > /dev/null; fi
+      - name: Run accessibility rules on public production pages without content logs
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/j08-axe"
+          node --input-type=module <<'NODE'
+          import {chromium} from 'playwright';
+          import axe from 'axe-core';
+          import {appendFileSync} from 'node:fs';
+          const origin='https://aljamharah.pages.dev';
+          const pages=['index.html','lexicon.html','search.html','library.html','poets.html','jmr.html','privacy.html'];
+          const widths=[390,1280];
+          const results=[];
+          let browser;
+          try{
+            try{browser=await chromium.launch({channel:'chrome',headless:true,args:['--no-sandbox']});}
+            catch{browser=await chromium.launch({headless:true,args:['--no-sandbox']});}
+            for(const width of widths){
+              const context=await browser.newContext({viewport:{width,height:844},locale:'ar',bypassCSP:true,reducedMotion:'reduce'});
+              await context.route('**/*',route=>{
+                const req=route.request(),u=new URL(req.url());
+                return req.method()==='GET' && u.origin===origin?route.continue():route.abort();
+              });
+              for(const path of pages){
+                const p=await context.newPage();
+                await p.goto(origin+'/'+path,{waitUntil:'domcontentloaded',timeout:25000});
+                await p.addScriptTag({content:axe.source});
+                const violations=await p.evaluate(async()=>{
+                  const audit=await window.axe.run(document,{
+                    runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']}
+                  });
+                  return audit.violations.map(v=>({id:v.id,impact:v.impact,nodes:v.nodes.length}));
+                });
+                const critical=violations.filter(v=>v.impact==='critical'||v.impact==='serious');
+                results.push({path,width,critical:critical.length,violations});
+                console.log('J08_AXE '+path+' width='+width+' rules_violated='+violations.length+' serious_critical='+critical.length+
+                  ' rule_ids='+violations.map(v=>v.id).join(','));
+                await p.close();
+              }
+              await context.close();
+            }
+          }finally{if(browser)await browser.close();}
+          const total=results.reduce((n,r)=>n+r.violations.length,0);
+          const serious=results.reduce((n,r)=>n+r.critical,0);
+          const unique=[...new Set(results.flatMap(r=>r.violations.map(v=>v.id)))].sort();
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,[
+            '### J08 anonymous public WCAG2A/AA automated audit',
+            '- 7 public pages × 2 Chromium viewport widths = 14 browser screens',
+            '- Ruleset: axe-core WCAG2A, WCAG2AA, WCAG21A and WCAG21AA',
+            '- Violated rule occurrences: '+total+'; serious or critical: '+serious,
+            '- Rule IDs: '+unique.join(', '),
+            '- No page content, visitor data, historical previews or source files logged',
+            '- This is an automated lab audit, not a physical-device or screen-reader certification'
+          ].join('\n')+'\n');
+          console.log('J08_AXE_SUMMARY screens='+results.length+' violated='+total+' serious_critical='+serious+' rules='+unique.join(','));
+          if(serious>0)process.exitCode=1;
+          NODE
