@@ -1,0 +1,83 @@
+name: J07 fresh-browser public data surface inventory (GET-only)
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/j07-browser-data-surface-readonly-20261117.yml"
+permissions:
+  contents: read
+jobs:
+  inventory:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install temporary Chromium tooling
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/privacy-browser"
+          cd "$RUNNER_TEMP/privacy-browser"
+          npm install --no-audit --no-fund --no-save --package-lock=false playwright@1.56.1 > /dev/null
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            npx playwright install chromium > /dev/null
+          fi
+      - name: Survey fresh anonymous visit only with no geolocation and no writes
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/privacy-browser"
+          node --input-type=module <<'NODE'
+          import {chromium} from "playwright";
+          import {appendFileSync} from "node:fs";
+          const origin="https://aljamharah.pages.dev";
+          const paths=["index.html","privacy.html","search.html","lexicon.html","jmr.html"];
+          const approved=new Set(["aljamharah.pages.dev","fonts.googleapis.com","fonts.gstatic.com","api.aladhan.com"]);
+          const external=new Set(),unexpected=new Set(),stores=new Set(),cookieNames=new Set(),methods=new Set();
+          let pageErrors=0;
+          let browser;
+          try{
+            try{browser=await chromium.launch({channel:"chrome",headless:true,args:["--no-sandbox"]});}
+            catch{browser=await chromium.launch({headless:true,args:["--no-sandbox"]});}
+            const context=await browser.newContext({viewport:{width:390,height:844},locale:"ar",geolocation:undefined});
+            await context.route("**/*",route=>{
+              const req=route.request(),u=new URL(req.url());
+              methods.add(req.method());
+              if(req.method()!=="GET")return route.abort();
+              if(u.protocol!=="https:")return route.abort();
+              if(u.hostname!=="aljamharah.pages.dev") {
+                external.add(u.hostname);
+                if(!approved.has(u.hostname))unexpected.add(u.hostname);
+              }
+              return route.continue();
+            });
+            for(const path of paths){
+              const page=await context.newPage();
+              page.on("pageerror",()=>pageErrors++);
+              await page.goto(origin+"/"+path,{waitUntil:"domcontentloaded",timeout:25000});
+              await page.waitForTimeout(750);
+              const keys=await page.evaluate(()=>{
+                try{return Object.keys(localStorage);}catch{return [];}
+              });
+              for(const key of keys)stores.add(key);
+              await page.close();
+            }
+            for(const cookie of await context.cookies(origin))cookieNames.add(cookie.name);
+            await context.close();
+          }finally{if(browser)await browser.close();}
+          const unapproved=unexpected.size;
+          const summary=[
+            "### J-07 public first-visit network and storage inventory (automated lab)",
+            "- Anonymous fresh Chromium session; no geolocation permission, account or JMR question",
+            "- Pages checked: "+paths.length+", viewport: 390px",
+            "- External hosts observed: "+external.size+" (unrecognized outside audited list: "+unapproved+")",
+            "- localStorage keys observed: "+stores.size+"; cookie names observed: "+cookieNames.size,
+            "- HTTP method categories observed: "+[...methods].sort().join(","),
+            "- JavaScript uncaught errors: "+pageErrors,
+            "- Only aggregated counts; no IP, token, cookie values, source content or GPS coordinates logged",
+            "- This is a browser snapshot, NOT GDPR legal approval or an exhaustive provider retention audit"
+          ];
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,summary.join("\n")+"\n");
+          console.log("J07_SURFACE_SUMMARY pages="+paths.length+" external_hosts="+external.size+
+            " unexpected_external_hosts="+unapproved+" storage_keys="+stores.size+
+            " cookie_names="+cookieNames.size+" js_errors="+pageErrors);
+          if(unapproved>0||pageErrors>0)process.exitCode=1;
+          NODE
