@@ -19,11 +19,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 43946f6564a15748153a1cd17f1ba54ac541e64a
+          ref: 61dadb7ead660c93c3d3d36578579cb713e6d53d
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: before
-      - name: Checkout pinned candidate PR154
+      - name: Checkout pinned candidate PR156
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
@@ -34,16 +34,16 @@ jobs:
           fetch-depth: 0
       - name: Assert revision identity and no branch drift
         run: |
-          test "$(git -C before rev-parse HEAD)" = "43946f6564a15748153a1cd17f1ba54ac541e64a"
+          test "$(git -C before rev-parse HEAD)" = "61dadb7ead660c93c3d3d36578579cb713e6d53d"
           test "$(git -C after rev-parse HEAD)" = "df536a02d6f159765c5ff72c79f6bf18e7d83903"
-      - name: Validate PR154 combined with current main without pushing
+      - name: Validate PR156 combined with current main without pushing
         run: |
           set -euo pipefail
           git -C after config user.name "JMR CI isolated review"
           git -C after config user.email "jmr-ci@users.noreply.github.com"
-          git -C after merge --no-gpg-sign --no-edit 43946f6564a15748153a1cd17f1ba54ac541e64a > /tmp/j04_virtual_merge.log 2>&1 ||
-            { echo "::error::PR154 conflicts with newer main; merge logs kept private"; exit 1; }
-          git -C after merge-base --is-ancestor 43946f6564a15748153a1cd17f1ba54ac541e64a HEAD
+          git -C after merge --no-gpg-sign --no-edit 61dadb7ead660c93c3d3d36578579cb713e6d53d > /tmp/j04_virtual_merge.log 2>&1 ||
+            { echo "::error::PR156 conflicts with newer main; merge logs kept private"; exit 1; }
+          git -C after merge-base --is-ancestor 61dadb7ead660c93c3d3d36578579cb713e6d53d HEAD
           git -C after merge-base --is-ancestor df536a02d6f159765c5ff72c79f6bf18e7d83903 HEAD
           echo "J04_VIRTUAL_MERGE_PASS"
       - uses: actions/setup-node@v4
@@ -72,7 +72,7 @@ jobs:
           node scripts/check_site_foundation.mjs > /tmp/j04_private_foundation.log 2>&1 ||
             { echo "::error::Full foundation failed"; exit 1; }
           echo "J04_FOUNDATION_PASS"
-      - name: Independently build baseline and PR154
+      - name: Independently build baseline and PR156
         run: |
           (cd before && node scripts/build_public_site.mjs > /tmp/j04_before.log 2>&1) ||
             { echo "::error::Baseline build failed"; exit 1; }
