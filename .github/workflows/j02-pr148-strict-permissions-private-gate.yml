@@ -56,7 +56,11 @@ jobs:
             { echo "::error::Authoritative Markdown/JSON drift"; exit 1; }
           echo "J02_LIBRARY_SYNC_PASS"
           python scripts/validate_library.py > /tmp/j02_library_validation.log 2>&1 ||
-            { echo "::error::Full reader/rights fixture validation failed"; exit 1; }
+            {
+              grep -Eo 'validate_library.py", line [0-9]+' /tmp/j02_library_validation.log |
+                sed -E 's/.*line /J02_VALIDATOR_LINE=/' | tail -n 6 || true
+              echo "::error::Full reader/rights fixture validation failed; only traceback line numbers emitted"; exit 1;
+            }
           echo "J02_LIBRARY_RIGHTS_PASS"
       - name: Complete source and integration checks
         working-directory: after
