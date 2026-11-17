@@ -1,0 +1,33 @@
+name: Lint free release gate YAML without private credentials
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/production-release-gate.yml"
+      - ".github/workflows/release-gate-yaml-lint.yml"
+permissions:
+  contents: read
+jobs:
+  syntax:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Parse workflow YAML locally
+        run: |
+          ruby -r yaml -e 'x = YAML.load_file(".github/workflows/production-release-gate.yml"); raise "jobs missing" unless x["jobs"].is_a?(Hash) && x["jobs"].keys.sort == %w[durable-object production-public-safety source]'
+      - name: Assert manual SHA gate protects both private checkouts
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const s=readFileSync('.github/workflows/production-release-gate.yml','utf8');
+          assert.match(s,/expected_private_sha:\s*\n\s*description:/);
+          assert.equal((s.match(/PRIVATE_SOURCE_SHA_QUALIFIED/g)||[]).length,2);
+          assert.equal((s.match(/if \[ "\$EVENT_NAME" = workflow_dispatch \]; then/g)||[]).length,2);
+          assert.equal((s.match(/if \[ "\$ACTUAL_SHA" != "\$EXPECTED_SHA" \]; then/g)||[]).length,2);
+          console.log('Free release gate schema and SHA guard contract PASS; no private checkout or token access');
+          NODE

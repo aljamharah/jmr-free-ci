@@ -5,6 +5,11 @@ on:
     paths:
       - ".github/workflows/production-release-gate.yml"
   workflow_dispatch:
+    inputs:
+      expected_private_sha:
+        description: "Exact 40-character private main commit SHA to qualify; required to prevent moving-main races"
+        required: true
+        type: string
 permissions:
   contents: read
 jobs:
@@ -20,6 +25,26 @@ jobs:
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: source
           persist-credentials: false
+      - name: "Fail closed if manually requested private SHA differs from checkout"
+        working-directory: source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.inputs.expected_private_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            if ! [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::An exact lowercase 40-character private commit SHA is required."
+              exit 1
+            fi
+            if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+              echo "::error::Private main advanced or differs from candidate; refuse unpinned qualification."
+              exit 1
+            fi
+          fi
+          echo "PRIVATE_SOURCE_SHA_QUALIFIED=$ACTUAL_SHA"
       - name: "Record verified private-source revision only"
         working-directory: source
         run: git rev-parse HEAD
@@ -57,6 +82,26 @@ jobs:
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: source
           persist-credentials: false
+      - name: "Fail closed if manually requested private SHA differs from checkout"
+        working-directory: source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.inputs.expected_private_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            if ! [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::An exact lowercase 40-character private commit SHA is required."
+              exit 1
+            fi
+            if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+              echo "::error::Private main advanced or differs from candidate; refuse unpinned qualification."
+              exit 1
+            fi
+          fi
+          echo "PRIVATE_SOURCE_SHA_QUALIFIED=$ACTUAL_SHA"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
