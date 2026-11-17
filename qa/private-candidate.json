@@ -1,0 +1,5 @@
+{
+  "private_ref": "qa/editorial-source-relationships-20261117",
+  "expected_sha": "102c0ead0c71f84238c0edc359ae4bbc32f99481",
+  "check": "tests/editorial-source-relationships.test.mjs"
+}
