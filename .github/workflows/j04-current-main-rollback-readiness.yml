@@ -65,7 +65,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for pattern in test_j04_d1_dry_run.py test_j04_transaction_rollback.py test_j04_public_read_pagination.py; do
+          for pattern in test_j04_d1_dry_run.py test_j04_transaction_rollback.py test_j04_public_read_pagination.py test_j04_d1_catalog_compatibility.py; do
             if python -m unittest discover -s tests -p "$pattern" > /tmp/j04_unit_private.log 2>&1; then
               echo "J04_OFFLINE_UNIT_PASS $pattern"
             else
@@ -73,6 +73,37 @@ jobs:
               exit 1
             fi
           done
+      - name: Require explicit NO-GO for the observed incompatible existing D1 catalog
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/j04_d1_catalog_compatibility_guard.py ]; then
+            echo '::error::Current private main lacks the mandatory D1 catalog compatibility guard'
+            exit 1
+          fi
+          set +e
+          python scripts/j04_d1_catalog_compatibility_guard.py >/tmp/j04_catalog_guard_report.json 2>/tmp/j04_catalog_guard_errors.log
+          code=$?
+          set -e
+          if [ "$code" -ne 2 ]; then
+            echo '::error::The stored existing D1 catalog is no longer explicitly blocked; recertify live schema before migration'
+            exit 1
+          fi
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('/tmp/j04_catalog_guard_report.json').read_text(encoding='utf8'))
+          if d.get('compatible_existing_table_shapes') is not False:
+            raise SystemExit('Unexpected compatible-existing-D1 result')
+          mismatches=d.get('mismatches',{}).get('lexicon_entry_sources',[])
+          if ('column_name_type_nullability_or_primary_key_mismatch' not in mismatches or
+              'foreign_key_mismatch' not in mismatches):
+            raise SystemExit('Observed live D1 linkage mismatch no longer detected')
+          if d.get('remote_d1_checked') is not False or d.get('d1_mutations')!=0:
+            raise SystemExit('Catalog guard must be entirely offline')
+          print('J04_EXISTING_D1_MIGRATION_NO_GO_CONFIRMED')
+          PY
       - name: Reconcile all current JSON counts and ten lexicon shards without remote D1
         working-directory: source
         shell: bash
@@ -116,9 +147,10 @@ jobs:
             echo '### J04 current private main offline readiness (NO production D1 writes)'
             echo "- Exact private source commit: $(git -C source rev-parse HEAD)"
             echo '- 0001 migration and schema identical when compiled in SQLite: PASS'
-            echo '- All three J04 test suites, including late failure, outer transaction rollback and replay: PASS'
+            echo '- All four J04 offline suites, including observed D1 schema blocker, late failure, outer transaction rollback and replay: PASS'
             echo '- Full dynamic source counts, 10 lexicon shards, foreign-key checks: PASS'
             echo '- Public keyset read-only pagination contract and rights suppression: PASS'
+            echo '- Existing observed D1 table schema is incompatible with migration 0001: intentional NO-GO gate PASS'
             echo '- No Cloudflare API, no D1 query, no SQL mutation of a remote database, no Pages bindings'
             echo '- No files, tokens, private source rows or logs uploaded as artifacts'
             echo '- NOT approval to create schema or cut over production'
