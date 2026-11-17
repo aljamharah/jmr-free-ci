@@ -143,11 +143,11 @@ try {
         // locator.click already completes its navigation; re-waiting for a navigation
         // event here can hang if the event was consumed by click auto-wait.
         const landed=new URL(p.url());
-        safe(landed.pathname==='/poem.html'&&landed.searchParams.has('slug'),
+        safe(['/poem','/poem.html'].includes(landed.pathname)&&landed.searchParams.has('slug'),
           'poem card click did not open detail '+v.id+' pathname='+landed.pathname);
         await p.locator('h1').first().waitFor({state:'visible',timeout:15000});
         await p.goBack({waitUntil:'domcontentloaded',timeout:25000});
-        safe(p.url().includes('/search.html'),'search back navigation '+v.id);
+        safe(['/search','/search.html'].includes(new URL(p.url()).pathname),'search back navigation '+v.id);
         await submit('فلاوجودلهذاالاختبار',null);
         safe((await p.locator('.unified-empty').count())===1,'empty state '+v.id);
         safe(errors.length===0,'search JavaScript '+v.id);
