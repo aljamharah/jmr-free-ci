@@ -31,8 +31,11 @@ jobs:
           ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           TOKEN: ${{ secrets.ALJAMHARAH_CF_MAINTENANCE_TOKEN }}
         run: |
-          node --input-type=module <<'NODE'
+          set +e
+          for attempt in 1 2 3; do
+            node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
+          try {
           const account=process.env.ACCOUNT,token=process.env.TOKEN;
           assert.match(account||'',/^[a-f0-9]{32}$/i,'Missing account configuration');
           assert.ok(token?.length>=12,'Missing existing Pages API read credential');
@@ -215,4 +218,17 @@ jobs:
           if(!report.all_reported_urls_protected||production_public!==2)
             throw Error('Historical Access coverage or canonical production safety cannot be accepted');
           console.log('PASS: every API-reported hashed deployment and alias route tested is anonymous-blocked; canonical production is public. Unknown aliases remain unverified.');
+          } catch (e) {
+            if (e?.message === 'Inventory changed while reading Pages listing') {
+              console.log('::warning title=Cloudflare inventory drift::Deployment list changed during pagination; rerunning a fresh complete inventory.');
+              process.exitCode = 75;
+            } else { throw e; }
+          }
           NODE
+            code=$?
+            if [ "$code" -eq 0 ]; then exit 0; fi
+            if [ "$code" -ne 75 ]; then exit "$code"; fi
+            if [ "$attempt" -lt 3 ]; then sleep 7; fi
+          done
+          echo '::error title=Cloudflare inventory unstable::3 complete snapshots failed due to concurrent changes; no protection verdict was issued.'
+          exit 1
