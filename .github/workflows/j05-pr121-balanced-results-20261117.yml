@@ -1,0 +1,104 @@
+name: J05 PR121 balanced search pinned source and allowlisted dist diff
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j05-pr121-balanced-results-20261117.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: j05-pr121-pinned-20261117
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Require pre-existing private Contents Read only token
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          test -n "$TOKEN" || { echo "::error::Missing read-only token"; exit 1; }
+      - name: Pin baseline source
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 9ec4fd54f68d13d6d244bf0a3b7d85718a1c8d9b
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+      - name: Pin PR121 candidate source
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 24dd9ec1c1f576b58ddeac18310478b484a35c14
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+      - name: Verify pinned refs and no drift
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "9ec4fd54f68d13d6d244bf0a3b7d85718a1c8d9b"
+          test "$(git -C candidate rev-parse HEAD)" = "24dd9ec1c1f576b58ddeac18310478b484a35c14"
+          echo "SOURCE_SHA_PIN_OK"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install free, open-source CMS validators
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Run complete site, privacy, AI mocks and new search behavior tests
+        working-directory: candidate
+        run: |
+          if node scripts/check_site_foundation.mjs > /tmp/private_j05_tests.log 2>&1; then
+            echo "J05_FULL_SITE_SOURCE_TESTS_PASS"
+          else
+            echo "::error::Source test gate failure; private source logs withheld"
+            exit 1
+          fi
+      - name: Build baseline and candidate without exposing private content
+        run: |
+          (cd baseline && node scripts/build_public_site.mjs > /tmp/baseline_private_build.log 2>&1) ||
+            { echo "::error::Baseline public build failed"; exit 1; }
+          (cd candidate && node scripts/build_public_site.mjs > /tmp/candidate_private_build.log 2>&1) ||
+            { echo "::error::Candidate public build failed"; exit 1; }
+      - name: Assert only two expected public JavaScript files changed
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          import {compareInventories} from './candidate/scripts/validation/compare-public-dist.mjs';
+          const before=JSON.parse(readFileSync('baseline/build-reports/dist-inventory.json','utf8'));
+          const after=JSON.parse(readFileSync('candidate/build-reports/dist-inventory.json','utf8'));
+          const result=compareInventories(before,after);
+          const paths=result.modified.map(f=>f.path).sort();
+          const expected=['assets/jamharah-unified-search-ui.mjs','assets/jamharah-unified-search.mjs'];
+          if(result.added.length||result.removed.length||JSON.stringify(paths)!==JSON.stringify(expected)){
+            throw Error('Unexpected static public files or path drift; diff contents withheld');
+          }
+          if(result.beforeCount!==result.afterCount || result.beforeCount<500){
+            throw Error('Unexpected inventory count');
+          }
+          for(const change of result.modified)if(change.after.bytes>change.before.bytes+2000){
+            throw Error('Unexpected asset size increase');
+          }
+          console.log('J05_PUBLIC_DIFF_ALLOWLIST_PASS: 2 expected JS assets; zero additions/removals');
+          NODE
+      - name: Guard no source edits and produce safe summary
+        run: |
+          set -euo pipefail
+          git -C baseline diff --exit-code --quiet
+          git -C candidate diff --exit-code --quiet
+          {
+            echo "### J05 pinned PR121 source and public change gate"
+            echo "- Candidate and base exact SHA: verified"
+            echo "- Full source, CMS and browser-independent regression suite: PASS"
+            echo "- Public diff: only two expected JavaScript asset files"
+            echo "- All public asset paths/total count preserved; no draft leaks"
+            echo "- No models, remote Pages writes, secret logging or artifact upload"
+            echo "- Advisory evidence; re-check live Preview and current Git refs before merge"
+          } >> "$GITHUB_STEP_SUMMARY"
