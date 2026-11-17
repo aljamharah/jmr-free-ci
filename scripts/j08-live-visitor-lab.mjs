@@ -137,9 +137,15 @@ try {
         // Exercise actual pointer navigation to a published poem and browser Back.
         const poemLink=p.locator('.unified-result').filter({hasText:'القصائد'}).first();
         safe((await poemLink.count())===1,'poem card missing before navigation '+v.id);
+        const destination=await poemLink.getAttribute('href');
+        safe(!!destination&&destination.startsWith('poem.html?slug='),'invalid published poem href '+v.id);
         await poemLink.click();
-        await p.waitForURL(/\/poem\.html\?slug=/,{waitUntil:'domcontentloaded',timeout:20000});
-        safe((await p.locator('h1').count())>=1,'poem detail missing heading '+v.id);
+        // locator.click already completes its navigation; re-waiting for a navigation
+        // event here can hang if the event was consumed by click auto-wait.
+        const landed=new URL(p.url());
+        safe(landed.pathname==='/poem.html'&&landed.searchParams.has('slug'),
+          'poem card click did not open detail '+v.id+' pathname='+landed.pathname);
+        await p.locator('h1').first().waitFor({state:'visible',timeout:15000});
         await p.goBack({waitUntil:'domcontentloaded',timeout:25000});
         safe(p.url().includes('/search.html'),'search back navigation '+v.id);
         await submit('فلاوجودلهذاالاختبار',null);
