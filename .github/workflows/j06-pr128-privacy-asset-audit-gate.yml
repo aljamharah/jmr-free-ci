@@ -27,14 +27,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 064e94df663c1c1937894ec9941bdbcb614314e2
+          ref: a95c3d41e7c35787a8a9e2f4892343e5e7bcb1cc
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: after
       - name: Assert pinning
         run: |
           test "$(git -C before rev-parse HEAD)" = "4cd218a2e9062fd5c5df056c8063103d6d790d78"
-          test "$(git -C after rev-parse HEAD)" = "064e94df663c1c1937894ec9941bdbcb614314e2"
+          test "$(git -C after rev-parse HEAD)" = "a95c3d41e7c35787a8a9e2f4892343e5e7bcb1cc"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
