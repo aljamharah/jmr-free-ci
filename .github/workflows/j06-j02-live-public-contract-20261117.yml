@@ -1,0 +1,104 @@
+name: J06 J02 public production JSON rights and navigation contract (GET-only)
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j06-j02-live-public-contract-20261117.yml"]
+permissions:
+  contents: read
+jobs:
+  live-contract:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Test only known public production endpoints and published records
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import {appendFileSync} from 'node:fs';
+          import assert from 'node:assert/strict';
+          const origin='https://aljamharah.pages.dev';
+          let count=0;
+          const check=(value,message)=>{assert.ok(value,message);count++};
+          async function get(path){
+            check(typeof path==='string' && path.startsWith('/')&&!path.includes('..')&&!path.includes('://'),
+              'invalid public path');
+            const url=new URL(path,origin);
+            check(url.origin===origin,'unexpected fetch origin');
+            const response=await fetch(url,{method:'GET',redirect:'manual',signal:AbortSignal.timeout(18000)});
+            check(response.status===200,'public endpoint not HTTP 200');
+            return {type:response.headers.get('content-type')||'',body:await response.text()};
+          }
+          async function json(path){
+            const x=await get(path);
+            check(x.type.includes('application/json'),'not JSON');
+            return JSON.parse(x.body);
+          }
+          const taxonomy=await json('/content/taxonomy.json');
+          const poets=(await json('/content/poets.json')).poets;
+          const poems=(await json('/content/poems.json')).poems;
+          const books=(await json('/content/books/index.json')).books;
+          check(Array.isArray(poets)&&poets.length===13,'published poet count changed');
+          check(Array.isArray(poems)&&poems.length===11,'published poem count changed');
+          check(Array.isArray(books)&&books.length===9,'bibliographic index count changed');
+          const groups=taxonomy.groups||[];
+          const eras=new Set(groups.find(g=>g.id==='eras')?.items.map(x=>x.id)||[]);
+          const states=new Set(groups.find(g=>g.id==='poets')?.items.find(x=>x.id==='states')?.items.map(x=>x.id)||[]);
+          const cats=new Set(groups.find(g=>g.id==='arab-poetry')?.items.map(x=>x.id)||[]);
+          const pmap=new Map(poets.map(p=>[p.slug,p]));
+          check(pmap.size===poets.length,'duplicate public poets');
+          for(const p of poets){
+            check(p.publication_status==='published'&&eras.has(p.era_id)&&states.has(p.state_id),
+              'invalid public poet status/taxonomy');
+            check(!Object.hasOwn(p,'editorial_note'),'private poet field');
+          }
+          for(const poem of poems){
+            const author=pmap.get(poem.poet_slug);
+            check(poem.publication_status==='published'&&!!author&&author.era_id===poem.era_id,
+              'invalid public poem relationship');
+            if(poem.collection_id)check(cats.has(poem.collection_id),'invalid public collection');
+            for(const forbidden of ['rights_basis','text_attribution','editorial_token','editorial_note']){
+              check(!Object.hasOwn(poem,forbidden),'leaked private poem field');
+            }
+            const mayRead=['public_domain','permission_granted'].includes(poem.rights_status)
+              && poem.text_status==='local_text';
+            check(mayRead||!(poem.body||'').trim(),'unverified body exposed');
+          }
+          for(const book of books){
+            check(book.publication_status==='published'&&/^[A-Za-z0-9_-]{1,100}$/.test(book.id),
+              'bad public book ID');
+            check(book.record==='content/books/records/'+book.id+'.json',
+              'unexpected public record path');
+            const r=await json('/'+book.record);
+            check(r.id===book.id&&r.publication_status==='published','book record mismatch');
+            check(r.rights_status==='pending_review'&&r.rights_basis_verified===false,
+              'unexpected book rights state');
+            check(r.reading_allowed===false&&r.download_allowed===false&&r.external_embed_allowed===false,
+              'unapproved book display/download/embed');
+            check(!r.text_content&&!r.pdf_url&&!r.external_embed_url&&!r.text_download_url,
+              'restricted book file link exposed');
+          }
+          for(const page of ['index.html','catalog.html','lexicon.html','library.html','search.html',
+                             'poets.html','poet.html','poem.html','book.html','reader.html',
+                             'jmr.html','privacy.html']){
+            const r=await get('/'+page);
+            check(r.type.includes('text/html')&&/<html[\s>]/i.test(r.body),
+              'missing public HTML page');
+          }
+          const canary=await get('/___jmr_nonexistent_public_guard_651eaa');
+          for(const path of ['/package.json','/functions/api/jmr.js','/scripts/build_public_site.mjs']){
+            const target=await get(path);
+            check(target.type.includes('text/html')&&target.body===canary.body,
+              'private source path not same as unknown HTML fallback');
+          }
+          console.log('J06_J02_LIVE_CONTRACT_PASS poets=13 poems=11 books=9 pages=12 zero_unapproved_content');
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### J-06 and J-02 public contract on latest production\n'+
+            '- Public GET only, no private source/token and no POST/AI\n'+
+            '- Published poets: 13, poems: 11, metadata-only books: 9\n'+
+            '- 12 HTML pages reachable; unknown HTML fallback matches tested private paths\n'+
+            '- Taxonomy and author relationships: valid; draft/private rights fields absent\n'+
+            '- Books have pending review, no reading/download/embed permissions\n'+
+            '- Checks evaluated: '+count+'; no confidential content logged\n'+
+            '- Not a copyright legal assessment or real-device test\n');
+          NODE
