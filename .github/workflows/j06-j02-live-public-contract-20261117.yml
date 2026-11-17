@@ -26,7 +26,7 @@ jobs:
             const url=new URL(path,origin);
             check(url.origin===origin,'unexpected fetch origin');
             const response=await fetch(url,{method:'GET',redirect:'manual',signal:AbortSignal.timeout(18000)});
-            check(response.status===200,'public endpoint not HTTP 200');
+            check(response.status===200,'unexpected HTTP '+response.status+' on known public path '+path);
             return {type:response.headers.get('content-type')||'',body:await response.text()};
           }
           async function json(path){
