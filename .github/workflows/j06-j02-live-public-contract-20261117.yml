@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
     paths: [".github/workflows/j06-j02-live-public-contract-20261117.yml"]
+  workflow_dispatch:
+  schedule:
+    - cron: "29 7 * * 2"
 permissions:
   contents: read
 jobs:
