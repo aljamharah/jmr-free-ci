@@ -1,0 +1,133 @@
+name: J04 PR182 offline live-D1 catalog incompatibility fail-closed gate
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j04-pr182-offline-live-catalog-guard.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out immutable private base
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: bfe15211f203981afd89186d96004b59ea03a2ee
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Check out immutable private candidate
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: ef2caf727b6b8857ab2f56691ca0bc97f7ba8827
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+      - name: Assert exact reviewed private revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C before rev-parse HEAD)" = "bfe15211f203981afd89186d96004b59ea03a2ee"
+          test "$(git -C after rev-parse HEAD)" = "ef2caf727b6b8857ab2f56691ca0bc97f7ba8827"
+          echo 'J04_IMMUTABLE_CANDIDATE_PASS'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify observed D1 structure is deliberately rejected as incompatible
+        working-directory: after
+        shell: bash
+        run: |
+          set -euo pipefail
+          if python -m unittest discover -s tests -p 'test_j04_d1_catalog_compatibility.py' > /tmp/j04_guard_tests.log 2>&1; then
+            echo 'J04_D1_CATALOG_TESTS_PASS'
+          else
+            echo '::error::Catalog guard unit tests failed; source content logs withheld'
+            exit 1
+          fi
+          set +e
+          python scripts/j04_d1_catalog_compatibility_guard.py > /tmp/j04_guard_report.json 2>/tmp/j04_guard_errors.log
+          code=$?
+          set -e
+          if [ "$code" -ne 2 ]; then
+            echo '::error::Guard did not fail closed on the existing D1 catalog'
+            exit 1
+          fi
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('/tmp/j04_guard_report.json').read_text(encoding='utf8'))
+          assert d['compatible_existing_table_shapes'] is False
+          assert 'lexicon_entry_sources' in d['mismatches']
+          assert 'foreign_key_mismatch' in d['mismatches']['lexicon_entry_sources']
+          assert d['remote_d1_checked'] is False and d['d1_mutations'] == 0
+          print('J04_EXISTING_D1_CATALOG_INCOMPATIBLE_EXPECTED_PASS')
+          PY
+      - name: Regression-check old J04 rollback and pagination suites
+        working-directory: after
+        shell: bash
+        run: |
+          set -euo pipefail
+          for p in test_j04_d1_dry_run.py test_j04_transaction_rollback.py test_j04_public_read_pagination.py; do
+            python -m unittest discover -s tests -p "$p" > /tmp/j04_existing.log 2>&1 || {
+              echo '::error::Existing offline rollback/read safety suite failed; private output withheld'
+              exit 1
+            }
+          done
+          echo 'J04_PRIOR_ROLLBACK_SUITES_PASS'
+      - name: Compare public dist builds (no Cloudflare or AI calls)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+          (cd before && node scripts/build_public_site.mjs >/tmp/j04_before_build.log 2>&1) || {
+            echo '::error::Private baseline build failed; private output withheld'
+            exit 1
+          }
+          (cd after && node scripts/build_public_site.mjs >/tmp/j04_after_build.log 2>&1) || {
+            echo '::error::Private candidate build failed; private output withheld'
+            exit 1
+          }
+          (cd after && node scripts/validation/compare-public-dist.mjs ../before/build-reports/dist-inventory.json build-reports/dist-inventory.json >/tmp/j04_parity.log 2>&1) || {
+            echo '::error::Public static dist changed under docs/guard-only candidate'
+            exit 1
+          }
+          echo 'J04_PRODUCTION_DIST_BYTE_PARITY_PASS'
+      - name: Audit only allowed private paths changed and write safe report
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import subprocess
+          allowed={
+            'database/README-AR.md',
+            'database/J04-D1-RELEASE-ROLLBACK-READINESS-2026-11-17-AR.md',
+            'database/observations/d1-live-catalog-2026-11-17.json',
+            'scripts/j04_d1_catalog_compatibility_guard.py',
+            'tests/test_j04_d1_catalog_compatibility.py',
+          }
+          def files_at(path):
+            return subprocess.check_output(['git','-C',path,'ls-tree','-r','--name-only','HEAD'],text=True).splitlines()
+          before=set(files_at('before'))
+          after=set(files_at('after'))
+          new=after-before
+          assert new <= allowed, 'Candidate introduced unexpected source path'
+          assert len(new)==3, 'Unexpected new-file count'
+          PY
+          git -C before diff --exit-code --quiet
+          git -C after diff --exit-code --quiet
+          {
+            echo '### J-04 PR182: existing Cloudflare D1 catalog preflight (read-only local tests)'
+            echo '- Tested private candidate ef2caf727b6b8857ab2f56691ca0bc97f7ba8827 and base bfe15211f203981afd89186d96004b59ea03a2ee'
+            echo '- Existing D1 link table schema differs from migration 0001: **NO-GO intentionally enforced**'
+            echo '- Unit tests PASS; standalone compatibility guard explicitly rejects observed schema'
+            echo '- Existing rollback and public keyset pagination unit suites PASS'
+            echo '- Public static dist bit-for-bit parity PASS; visitor site unchanged'
+            echo '- No D1 SQL, Cloudflare writes, Pages deployments, private data artifacts or paid requests'
+          } >> "$GITHUB_STEP_SUMMARY"
