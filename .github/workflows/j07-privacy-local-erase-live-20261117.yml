@@ -1,0 +1,80 @@
+name: J07 live anonymous privacy local erasure regression
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j07-privacy-local-erase-live-20261117.yml"]
+permissions:
+  contents: read
+jobs:
+  browser:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install temporary browser tooling
+        run: |
+          mkdir -p "$RUNNER_TEMP/j07-erasure"
+          cd "$RUNNER_TEMP/j07-erasure"
+          npm install --no-audit --no-fund --no-save --package-lock=false playwright@1.56.1 >/dev/null
+          if ! command -v google-chrome >/dev/null 2>&1; then npx playwright install chromium >/dev/null; fi
+      - name: Verify user-owned browser keys erased but unrelated keys retained
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/j07-erasure"
+          node --input-type=module <<'NODE'
+          import {chromium} from 'playwright';
+          import assert from 'node:assert/strict';
+          import {appendFileSync} from 'node:fs';
+          const origin='https://aljamharah.pages.dev';
+          let checks=0,requests=0;
+          const check=(value,msg)=>{assert.ok(value,msg);checks++;};
+          let browser;
+          try{
+            try{browser=await chromium.launch({channel:'chrome',headless:true,args:['--no-sandbox']});}
+            catch{browser=await chromium.launch({headless:true,args:['--no-sandbox']});}
+            const context=await browser.newContext({viewport:{width:390,height:844},locale:'ar',permissions:[]});
+            await context.route('**/*',route=>{
+              const r=route.request();
+              if(r.method()!=='GET'||new URL(r.url()).origin!==origin)return route.abort();
+              requests++;
+              return route.continue();
+            });
+            const page=await context.newPage();
+            await page.goto(origin+'/privacy.html',{waitUntil:'domcontentloaded',timeout:25000});
+            check(await page.locator('#clearLocalJamharahSettings').count()===1,'missing local erasure control');
+            check(await page.locator('#localDataStatus[role="status"][aria-live="polite"]').count()===1,'missing accessible status');
+            await page.evaluate(()=>{
+              localStorage.setItem('jamharah-theme','light');
+              localStorage.setItem('jamharah-prayer-location-v1','{"city":"test","lat":0}');
+              localStorage.setItem('unrelated-app-owned-example','KEEP');
+              document.body.classList.add('light');
+            });
+            await page.locator('#clearLocalJamharahSettings').click();
+            const first=await page.evaluate(()=>({
+              theme:localStorage.getItem('jamharah-theme'),
+              location:localStorage.getItem('jamharah-prayer-location-v1'),
+              unrelated:localStorage.getItem('unrelated-app-owned-example'),
+              light:document.body.classList.contains('light'),
+              status:document.querySelector('#localDataStatus')?.textContent||''
+            }));
+            check(first.theme===null&&first.location===null,'Jamharah-owned local values not erased');
+            check(first.unrelated==='KEEP','unrelated local value was erased');
+            check(!first.light,'theme remained light after local erase');
+            check(first.status.includes('حُذفت'),'success status not accurate');
+            await page.locator('#clearLocalJamharahSettings').click();
+            const second=await page.locator('#localDataStatus').textContent();
+            check(second.includes('لا توجد'),'empty repeat action did not provide truthful status');
+            check(await page.locator('meta[name="robots"][content="noindex,follow"]').count()===1,
+              'preliminary privacy notice unexpectedly published for indexing');
+            await context.close();
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY,[
+              '### J-07 live local privacy erasure on production',
+              '- Public GET-only Chromium at 390px: '+checks+' assertions passed',
+              '- Erased 2 Jamharah-owned keys; unrelated local value retained; theme returned to default',
+              '- Accurate user-facing status and repeat erasure; policy remains preliminary noindex',
+              '- No geolocation consent, external POST, model calls or private source checkout',
+              '- Does not delete Cloudflare or AlAdhan logs or revoke browser location permission'
+            ].join('\n')+'\n');
+            console.log('J07_LOCAL_ERASE_PASS checks='+checks+' http_get_requests='+requests);
+          }finally{if(browser)await browser.close();}
+          NODE
