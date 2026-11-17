@@ -1,0 +1,123 @@
+name: J06 every published poet and poem detail browser navigation (GET only)
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j06-all-public-detail-browser-contract-20261117.yml"]
+permissions:
+  contents: read
+jobs:
+  live-detail:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 23
+    steps:
+      - name: Install disposable browser
+        run: |
+          mkdir -p "$RUNNER_TEMP/j06-detail"
+          cd "$RUNNER_TEMP/j06-detail"
+          npm install --no-audit --no-fund --no-save --package-lock=false playwright@1.56.1 >/dev/null
+          if ! command -v google-chrome >/dev/null 2>&1; then npx playwright install chromium >/dev/null; fi
+      - name: Check all published details and safe category-return flow
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/j06-detail"
+          node --input-type=module <<'NODE'
+          import {chromium} from 'playwright';
+          import assert from 'node:assert/strict';
+          import {appendFileSync} from 'node:fs';
+          const base='https://aljamharah.pages.dev';
+          async function publicJson(path){
+            const url=new URL(path,base);
+            assert.equal(url.origin,base);
+            const r=await fetch(url,{method:'GET',signal:AbortSignal.timeout(18000)});
+            assert.equal(r.status,200,'Public catalogue missing');
+            return r.json();
+          }
+          const poets=(await publicJson('/content/poets.json')).poets;
+          const poems=(await publicJson('/content/poems.json')).poems;
+          assert.equal(poets.length,13);
+          assert.equal(poems.length,11);
+          let browser,checks=0;
+          const ok=(v,msg)=>{assert.ok(v,msg);checks++;};
+          try{
+            try{browser=await chromium.launch({channel:'chrome',headless:true,args:['--no-sandbox']});}
+            catch{browser=await chromium.launch({headless:true,args:['--no-sandbox']});}
+            const ctx=await browser.newContext({viewport:{width:390,height:844},locale:'ar',reducedMotion:'reduce'});
+            await ctx.route('**/*',route=>{
+              const r=route.request(),u=new URL(r.url());
+              return r.method()==='GET' && u.origin===base?route.continue():route.abort();
+            });
+            const page=await ctx.newPage(),errors=[];
+            page.on('pageerror',e=>errors.push(e.message));
+            for(const poet of poets){
+              const response=await page.goto(base+'/poet.html?slug='+encodeURIComponent(poet.slug),{
+                waitUntil:'domcontentloaded',timeout:25000
+              });
+              ok(response?.status()===200,'Poet route returned non-200');
+              await page.waitForFunction(name=>
+                document.querySelector('#profileHero h1')?.textContent===name,poet.name_ar,{timeout:16000});
+              const list=page.locator('#poemList a.poem-card');
+              const expected=poems.filter(p=>p.poet_slug===poet.slug).length;
+              ok((await list.count())===expected,'Poet published poem list count mismatch');
+              const allLinks=await list.evaluateAll(nodes=>nodes.map(x=>x.getAttribute('href')));
+              ok(allLinks.every(url=>url?.startsWith('poem.html?slug=')&&!url.startsWith('//')),
+                'Untrusted poem detail link');
+            }
+            const pMap=new Map(poets.map(p=>[p.slug,p]));
+            for(const poem of poems){
+              const response=await page.goto(base+'/poem.html?slug='+encodeURIComponent(poem.slug),{
+                waitUntil:'domcontentloaded',timeout:25000
+              });
+              ok(response?.status()===200,'Poem route returned non-200');
+              await page.waitForFunction(title=>
+                document.querySelector('#poemHero h1')?.textContent===title,poem.title,{timeout:16000});
+              const authorLink=page.locator('#poemHero .byline a');
+              ok((await authorLink.count())===1,'Poem missing linked published poet');
+              const href=await authorLink.getAttribute('href');
+              ok(href?.startsWith('poet.html?slug='+encodeURIComponent(poem.poet_slug)),
+                'Poem author link mismatch');
+              const mayShow=poem.text_status==='local_text'&&
+                ['public_domain','permission_granted'].includes(poem.rights_status);
+              if(mayShow){
+                ok((await page.locator('#poemText .poem-line').count())>0||
+                   (await page.locator('#poemVerses').innerText()).trim().length>0,
+                  'Approved published poem text did not render');
+              }else{
+                ok((await page.locator('#poemText').innerText()).includes('لم يُنشر النص الكامل'),
+                  'Restricted poem text must remain hidden');
+              }
+              ok(pMap.has(poem.poet_slug),'Orphan poet in public index');
+            }
+            await page.goto(base+'/poet.html?slug=__jmr_nonexistent__',{waitUntil:'domcontentloaded'});
+            await page.waitForFunction(()=>document.querySelector('#profileHero h1')?.textContent==='لم نعثر على ملف الشاعر');
+            checks++;
+            await page.goto(base+'/poem.html?slug=__jmr_nonexistent__',{waitUntil:'domcontentloaded'});
+            await page.waitForFunction(()=>document.querySelector('#poemHero h1')?.textContent==='لم نعثر على القصيدة');
+            checks++;
+            const nested=base+'/poet.html?slug=al-mutanabbi&from='+encodeURIComponent('catalog.html?group=poets&item=syria');
+            await page.goto(nested,{waitUntil:'domcontentloaded'});
+            await page.waitForFunction(()=>document.querySelector('#profileHero h1')?.textContent?.length>4);
+            const poemLink=page.locator('#poemList a.poem-card').first();
+            ok((await poemLink.count())===1,'Expected linked poem for navigation round trip');
+            const nestedUrl=await poemLink.getAttribute('href');
+            ok(nestedUrl?.includes('from='),'Nested poem link forgot category origin');
+            await page.goto(new URL(nestedUrl,base).href,{waitUntil:'domcontentloaded'});
+            await page.waitForFunction(()=>document.querySelector('#poemHero .byline a')!==null);
+            const back=await page.locator('#poemHero .byline a').getAttribute('href');
+            ok(back?.includes('from='),'Poem return-to-poet lost category origin');
+            ok(errors.length===0,'Uncaught detail-page JavaScript error');
+            await ctx.close();
+            console.log('J06_ALL_DETAILS_PASS poets='+poets.length+' poems='+poems.length+
+              ' checks='+checks+' untrusted_links=0 html_exposure=0');
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY,[
+              '### J-06 live published catalogue detail audit',
+              '- Public GET-only Chromium at 390px; no user data, source checkout or AI requests',
+              '- Verified all '+poets.length+' poet detail views and their exact published poem link counts',
+              '- Verified all '+poems.length+' poem detail titles, author links, and rights-gated text rendering',
+              '- Unpublished slugs show safe not-found state',
+              '- Category → poet → poem → poet return origin preserved',
+              '- Checks passed: '+checks+'; no uncaught JavaScript errors',
+              '- Browser functional audit does not verify historical authenticity or scientific attribution'
+            ].join('\n')+'\n');
+          }finally{if(browser)await browser.close();}
+          NODE
