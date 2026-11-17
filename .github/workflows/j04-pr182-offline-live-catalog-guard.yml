@@ -94,10 +94,29 @@ jobs:
             echo '::error::Private candidate build failed; private output withheld'
             exit 1
           }
-          (cd after && node scripts/validation/compare-public-dist.mjs ../before/build-reports/dist-inventory.json build-reports/dist-inventory.json >/tmp/j04_parity.log 2>&1) || {
-            echo '::error::Public static dist changed under docs/guard-only candidate'
+          if (cd after && node scripts/validation/compare-public-dist.mjs ../before/build-reports/dist-inventory.json build-reports/dist-inventory.json >/tmp/j04_parity.log 2>&1); then
+            echo 'J04_STATIC_DIST_PARITY_PASS'
+          else
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          raw=Path('/tmp/j04_parity.log').read_text(encoding='utf8')
+          try:
+              d=json.loads(raw)
+              print('J04_STATIC_DIFF_SUMMARY '+json.dumps({
+                  'identical':d.get('identical'),
+                  'beforeCount':d.get('beforeCount'),
+                  'afterCount':d.get('afterCount'),
+                  'added':d.get('added',[])[:10],
+                  'removed':d.get('removed',[])[:10],
+                  'modified_public_paths':[x['path'] for x in d.get('modified',[])][:10]
+              }))
+          except (ValueError,KeyError,TypeError):
+              print('J04_STATIC_DIFF_DIAGNOSTIC '+raw.strip()[:350])
+          PY
+            echo '::error::Public static dist differs; details limited to public static path names'
             exit 1
-          }
+          fi
           echo 'J04_PRODUCTION_DIST_BYTE_PARITY_PASS'
       - name: Audit only allowed private paths changed and write safe report
         shell: bash
