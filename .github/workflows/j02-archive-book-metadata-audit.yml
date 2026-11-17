@@ -1,0 +1,80 @@
+name: J02 Archive book PDF metadata health (no content downloads)
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/j02-archive-book-metadata-audit.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/j02-archive-book-metadata-audit.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: '29 5 * * 5'
+permissions:
+  contents: read
+concurrency:
+  group: j02-archive-metadata-check
+  cancel-in-progress: false
+jobs:
+  syntax:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Parse YAML without private secrets
+        run: |
+          ruby -r yaml -e 'x = YAML.load_file(".github/workflows/j02-archive-book-metadata-audit.yml"); raise "jobs missing" unless x["jobs"].is_a?(Hash)'
+  audit:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: main
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check only Archive item metadata and expected PDF filenames
+        working-directory: source
+        shell: bash
+        run: |
+          set -uo pipefail
+          python scripts/audit_archive_book_links.py --live > "$RUNNER_TEMP/j02_archive_metadata.json"
+          AUDIT_EXIT=$?
+          export AUDIT_EXIT
+          python - <<'PY'
+          import json,os,collections
+          from pathlib import Path
+          p=Path(os.environ['RUNNER_TEMP'])/'j02_archive_metadata.json'
+          if not p.is_file():
+              raise SystemExit('Archive health check emitted no report')
+          report=json.loads(p.read_text(encoding='utf-8'))
+          assert report.get('mode')=='live-metadata'
+          items=report.get('items',[])
+          assert items,'No Archive-backed records present'
+          counts=dict(sorted(collections.Counter(x.get('status','unknown') for x in items).items()))
+          checked=sum(x.get('file_count',0) for x in items)
+          good=counts.get('metadata-listed',0)
+          print('J02_ARCHIVE_HEALTH status_counts='+str(counts)+' records='+str(len(items))+' pdf_filenames='+str(checked))
+          print('No PDFs downloaded, no book rows, remote URLs, source IDs or response bodies printed or uploaded')
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as f:
+              f.write('### J02: Archive book metadata only (no PDF download)\n')
+              f.write('- Verified Archive item manifests: '+str(good)+'/'+str(len(items))+'\n')
+              f.write('- PDF filenames checked: '+str(checked)+'\n')
+              f.write('- Status counts: '+str(counts)+'\n')
+              f.write('- Private source commit: '+os.popen('git rev-parse HEAD').read().strip()+'\n')
+              f.write('- This is NOT proof of PDF download availability or publication rights.\n')
+          if good!=len(items) or int(os.environ['AUDIT_EXIT'])!=0:
+              raise SystemExit('Archive manifest integrity/availability requires review (no rights or files changed)')
+          PY
+      - name: Require clean private checkout
+        working-directory: source
+        run: git diff --exit-code -- .
