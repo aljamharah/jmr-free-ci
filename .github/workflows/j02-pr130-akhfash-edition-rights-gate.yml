@@ -1,0 +1,96 @@
+name: J02 PR130 verified bibliographic metadata without reader rights
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j02-pr130-akhfash-edition-rights-gate.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require existing read-only source credential
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: test -n "$TOKEN" || { echo "::error::Private read token unavailable"; exit 1; }
+      - name: Checkout exact baseline
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 055adaa79481b558f4701b6d3a6ae3b5c602affb
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 24c3656c2929e960875620ff6eec68a5dc8a5b21
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+      - name: Verify immutable source refs
+        run: |
+          set -euo pipefail
+          test "$(git -C before rev-parse HEAD)" = "055adaa79481b558f4701b6d3a6ae3b5c602affb"
+          test "$(git -C after rev-parse HEAD)" = "24c3656c2929e960875620ff6eec68a5dc8a5b21"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install free validation packages
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Verify editorial facts and fail-closed book rights
+        working-directory: after
+        run: |
+          node --test tests/editorial/j02-akhfash-edition-rights.test.mjs > /tmp/j02_private_unit.log 2>&1 ||
+            { echo "::error::Bibliographic metadata or permission guard failed"; exit 1; }
+          echo "J02_EDITION_RIGHTS_TEST_PASS"
+          node scripts/check_site_foundation.mjs > /tmp/j02_private_full.log 2>&1 ||
+            { echo "::error::Full foundation tests failed"; exit 1; }
+          echo "J02_FULL_FOUNDATION_PASS"
+      - name: Build isolated public bundles
+        run: |
+          (cd before && node scripts/build_public_site.mjs > /tmp/j02_before.log 2>&1) ||
+            { echo "::error::Baseline build failed"; exit 1; }
+          (cd after && node scripts/build_public_site.mjs > /tmp/j02_after.log 2>&1) ||
+            { echo "::error::Candidate build failed"; exit 1; }
+      - name: Assert only approved metadata JSON changed, with no path count drift
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          import {compareInventories} from './after/scripts/validation/compare-public-dist.mjs';
+          const before=JSON.parse(readFileSync('before/build-reports/dist-inventory.json','utf8'));
+          const after=JSON.parse(readFileSync('after/build-reports/dist-inventory.json','utf8'));
+          const diff=compareInventories(before,after);
+          const expected='content/books/records/akhfash-qawafi.json';
+          if(diff.added.length||diff.removed.length||diff.modified.length!==1||
+             diff.modified[0].path!==expected||diff.beforeCount!==diff.afterCount){
+            throw Error('Unexpected public asset change; contents withheld');
+          }
+          const record=JSON.parse(readFileSync('after/dist/'+expected,'utf8'));
+          if(record.edition!=='الطبعة الأولى'||record.rights_status!=='pending_review'||
+             record.rights_basis_verified!==false||record.reading_allowed!==false||
+             record.download_allowed!==false||record.external_embed_allowed!==false||
+             record.text_content!==''||record.pdf_url!==''){
+            throw Error('Published bibliographic rights or edition guard mismatch');
+          }
+          console.log('J02_PUBLIC_METADATA_DIFF_ALLOWLIST_PASS');
+          NODE
+      - name: Publish minimal safe review result
+        run: |
+          git -C before diff --exit-code --quiet
+          git -C after diff --exit-code --quiet
+          {
+            echo '### J02 PR130 edition metadata and rights'
+            echo '- Exact private revision pair verified'
+            echo '- Bibliographic first edition and no-reading guards: PASS'
+            echo '- Complete source and Node tests: PASS'
+            echo '- Exactly one approved bibliographic JSON changed; all public paths preserved'
+            echo '- No private book text, licensed PDF, live D1, AI or Cloudflare writes'
+            echo '- Advisory review only; verify new main and head again before merge'
+          } >> "$GITHUB_STEP_SUMMARY"
