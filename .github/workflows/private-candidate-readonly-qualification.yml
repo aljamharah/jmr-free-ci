@@ -1,0 +1,92 @@
+name: Free read-only private PR candidate qualification
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/private-candidate-readonly-qualification.yml"
+      - "qa/private-candidate.json"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: private-candidate-readonly-qualification
+  cancel-in-progress: false
+jobs:
+  candidate:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 27
+    steps:
+      - name: Checkout public audit configuration only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate pinned private branch and SHA before checkout
+        id: candidate
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync,appendFileSync} from 'node:fs';
+          import assert from 'node:assert/strict';
+          const x=JSON.parse(readFileSync('qa/private-candidate.json','utf8'));
+          assert.match(x.private_ref,/^[a-z0-9][a-z0-9._/-]{3,95}$/);
+          assert.ok(!x.private_ref.includes('..')&&!x.private_ref.startsWith('refs/'));
+          assert.match(x.expected_sha,/^[0-9a-f]{40}$/);
+          assert.equal(x.check,'tests/editorial-source-relationships.test.mjs');
+          appendFileSync(process.env.GITHUB_OUTPUT,
+            'private_ref='+x.private_ref+'\nexpected_sha='+x.expected_sha+'\n');
+          console.log('PRIVATE_CANDIDATE_PIN_FORMAT_PASS');
+          NODE
+      - name: Checkout reviewed private PR candidate (read-only, no persistent credentials)
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: ${{ steps.candidate.outputs.private_ref }}
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Refuse stale or unexpected private candidate
+        working-directory: source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.candidate.outputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::Private candidate changed; review and pin a new exact SHA."
+            exit 1
+          fi
+          echo "PRIVATE_CANDIDATE_EXACT_SHA_PASS"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Audit new editorial structural and rights regression (redacted logs)
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test tests/editorial-source-relationships.test.mjs > "$RUNNER_TEMP/private-candidate-editorial.log" 2>&1; then
+            echo "PRIVATE_CANDIDATE_EDITORIAL_PASS"
+          else
+            echo "::error::Private editorial regression failed; details kept off the public runner log."
+            exit 1
+          fi
+      - name: Run full private foundation and build locally (redacted logs)
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node scripts/check_site_foundation.mjs > "$RUNNER_TEMP/private-candidate-foundation.log" 2>&1; then
+            echo "PRIVATE_CANDIDATE_FULL_FOUNDATION_PASS"
+          else
+            echo "::error::Private baseline failed; details kept off the public runner log."
+            exit 1
+          fi
+      - name: Confirm no tracked private source changed and no public content uploaded
+        working-directory: source
+        run: |
+          git diff --exit-code --quiet
+          echo "PRIVATE_CANDIDATE_SOURCE_UNCHANGED_PASS"
+          echo "No private-source artifacts, log uploads, model calls, Cloudflare writes or D1 mutations."
