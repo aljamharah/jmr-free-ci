@@ -193,7 +193,7 @@ jobs:
             canonical_production_not_200:production_nonpublic,
             all_reported_urls_protected:metrics.public_200===0&&metrics.unknown_redirect===0&&
               metrics.other_status===0&&metrics.network_error===0&&unknown_hosts===0&&
-              metrics.access_login+metrics.access_denied===work.length,
+              metrics.access_login===work.length&&metrics.access_denied===0,
             all_alias_urls_known:unreported_alias_lists===0,
             response_bodies_logged:false,hosts_ids_secrets_logged:false,
             cloudflare_mutations:0,ai_model_calls:0,
