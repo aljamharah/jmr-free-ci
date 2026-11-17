@@ -30,7 +30,7 @@ test("Quran safety invariants remain mandatory", () => {
 });
 
 
-test("private-source validation is manual-only, owner-gated, and read-only", async () => {
+test("private-source validation uses owner-controlled push/manual main and is read-only", async () => {
   const workflow = await readFile(
     new URL("../.github/workflows/private-source-validation.yml", import.meta.url),
     "utf8"
@@ -41,6 +41,6 @@ test("private-source validation is manual-only, owner-gated, and read-only", asy
   assert.match(workflow, /if: github\.actor == 'aljamharah' && github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /Contents: Read-only/);
   assert.match(workflow, /persist-credentials: false/);
-  assert.ok(workflow.includes("ref: jmr/preview-rate-limit-2026-11-10"));
+  assert.match(workflow, /repository:\s*aljamharah\/aljamharah\s*\n\s*ref:\s*main/);
   assert.doesNotMatch(workflow, /upload-artifact/);
 });
