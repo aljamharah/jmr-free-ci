@@ -94,6 +94,29 @@ jobs:
             check(r.type.includes('text/html')&&/<html[\s>]/i.test(r.body),
               'missing public HTML page');
           }
+          // Confirm the deployed sitemap and robots are aligned, not just source JSON.
+          const robots=await get('/robots.txt');
+          const sitemap=await get('/sitemap.xml');
+          check(/User-agent:\s*\*/i.test(robots.body),'robots agents missing');
+          check(/^Disallow:\s*\/api\/\s*$/mi.test(robots.body),'robots API disallow missing');
+          check(/^Disallow:\s*\/admin\/\s*$/mi.test(robots.body),'robots admin disallow missing');
+          check(robots.body.includes('Sitemap: '+origin+'/sitemap.xml'),'robots sitemap URL mismatch');
+          check(sitemap.type.includes('xml'),'sitemap content type unexpected');
+          const sitemapUrls=[...sitemap.body.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m=>m[1].trim());
+          check(sitemapUrls.length>=7,'sitemap missing public routes');
+          check(new Set(sitemapUrls).size===sitemapUrls.length,'duplicate public sitemap routes');
+          for(const address of sitemapUrls){
+            const u=new URL(address);
+            check(u.origin===origin && u.protocol==='https:' && !u.search && !u.hash,
+              'non-canonical sitemap URL');
+            check(!/(?:privacy|api|admin|content|functions)/.test(u.pathname),
+              'unapproved sitemap route');
+          }
+          const privacy=await get('/privacy.html');
+          check(/<meta[^>]*name="robots"[^>]*content="noindex,follow"/i.test(privacy.body),
+            'draft privacy page lost noindex directive');
+          check(!sitemapUrls.includes(origin+'/privacy.html'),'privacy draft must not be in sitemap');
+          console.log('J06_LIVE_SITEMAP_ROBOTS_PASS entries='+sitemapUrls.length+' privacy_noindex=1');
           const canary=await get('/___jmr_nonexistent_public_guard_651eaa');
           for(const path of ['/package.json','/functions/api/jmr.js','/scripts/build_public_site.mjs']){
             const target=await get(path);
@@ -105,7 +128,7 @@ jobs:
             '### J-06 and J-02 public contract on latest production\n'+
             '- Public GET only, no private source/token and no POST/AI\n'+
             '- Published poets: 13, poems: 11, metadata-only books: 9\n'+
-            '- 12 HTML pages reachable; unknown HTML fallback matches tested private paths\n'+
+            '- 12 HTML pages reachable; canonical sitemap and robots aligned, privacy noindex remains\n'+
             '- Taxonomy and author relationships: valid; draft/private rights fields absent\n'+
             '- Books have pending review, no reading/download/embed permissions\n'+
             '- Checks evaluated: '+count+'; no confidential content logged\n'+
