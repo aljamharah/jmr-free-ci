@@ -1,0 +1,85 @@
+name: JMR PR123 pinned citation integrity and static dist parity
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/jmr-citation-gate-pr123-20261117.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Require existing read-only private source token
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: test -n "$TOKEN" || { echo "::error::Source token unavailable"; exit 1; }
+      - name: Checkout exact current baseline
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 394c700a8457e6819b91e684fbcce9dde8b4e84e
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Checkout exact JMR candidate
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: ca805f24b372b5282ac2c2ff8e92ef280feda2d3
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+      - name: Check both source identities
+        run: |
+          test "$(git -C before rev-parse HEAD)" = "394c700a8457e6819b91e684fbcce9dde8b4e84e"
+          test "$(git -C after rev-parse HEAD)" = "ca805f24b372b5282ac2c2ff8e92ef280feda2d3"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install free validation helpers
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Test citation links and 61 evaluation contracts
+        working-directory: after
+        run: |
+          node --test tests/jmr-knowledge-citation-integrity.test.mjs > /tmp/jmr_citation_tests.log 2>&1 ||
+            { echo "::error::JMR citation unit test failed; private details withheld"; exit 1; }
+          echo "JMR_CITATION_TESTS_PASS"
+      - name: Run all source and foundation regression tests
+        working-directory: after
+        run: |
+          node scripts/check_site_foundation.mjs > /tmp/jmr_source_tests.log 2>&1 ||
+            { echo "::error::JMR source foundation gate failed"; exit 1; }
+          echo "JMR_FULL_SOURCE_PASS"
+      - name: Build two independent public inventories
+        run: |
+          (cd before && node scripts/build_public_site.mjs > /tmp/jmr_before_build.log 2>&1) ||
+            { echo "::error::Baseline build failed"; exit 1; }
+          (cd after && node scripts/build_public_site.mjs > /tmp/jmr_after_build.log 2>&1) ||
+            { echo "::error::Candidate build failed"; exit 1; }
+      - name: Verify all public paths, bytes and hashes identical
+        working-directory: after
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../before/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json > /tmp/jmr_parity_private.log 2>&1 ||
+            { echo "::error::Unexpected public output differences"; exit 1; }
+          echo "JMR_PUBLIC_STATIC_PARITY_PASS"
+      - name: Record safe summary without private artifact upload
+        run: |
+          git -C before diff --exit-code --quiet
+          git -C after diff --exit-code --quiet
+          {
+            echo "### JMR knowledge citations and evaluation integrity, PR #123"
+            echo "- Exact private head/base SHA checked with read-only credential"
+            echo "- Reference and bibliography relationships: PASS"
+            echo "- 61 evaluation cases and schema: PASS"
+            echo "- Complete foundation/source checks: PASS"
+            echo "- Public static dist paths, bytes and hashes: IDENTICAL"
+            echo "- No model calls, live database, private source printing or artifacts"
+            echo "- This is structural integrity, not a scientific validation of each claim"
+          } >> "$GITHUB_STEP_SUMMARY"
