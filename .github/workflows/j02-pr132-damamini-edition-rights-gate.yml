@@ -51,7 +51,24 @@ jobs:
             { echo "::error::Edition or rights regression test failed"; exit 1; }
           echo "J02_DAMAMINI_UNIT_PASS"
           node scripts/check_site_foundation.mjs > /tmp/j02_private_foundation.log 2>&1 ||
-            { echo "::error::Full source foundation failed"; exit 1; }
+            {
+              node --input-type=module <<'JS'
+              import {readFileSync} from 'node:fs';
+              const s=readFileSync('/tmp/j02_private_foundation.log','utf8');
+              const labels=[
+                'Internal page/asset references',
+                'Sanitized deploy-only dist and draft privacy',
+                'Unified header and functional search navigation',
+                'Lexicon integrity','Lexicon fast search','Quran corpus integrity',
+                'JMR API behavior and input guards',
+                'JMR failure paths, free-tier quota and rate limits',
+                'JMR runtime regression tests','Node unit tests'
+              ];
+              const failed=labels.filter(label=>s.includes('FAILED: '+label+' ('));
+              console.log('J02_FOUNDATION_FAILED_CATEGORIES='+failed.map(label=>labels.indexOf(label)+1).join(','));
+              JS
+              echo "::error::Full source foundation failed; private details withheld"; exit 1;
+            }
           echo "J02_FULL_FOUNDATION_PASS"
       - name: Build isolated public outputs
         run: |
