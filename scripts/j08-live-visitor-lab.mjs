@@ -116,7 +116,7 @@ try {
         const submit=async (q,kind)=>{
           const started=Date.now();
           await p.locator('#unifiedQuery').fill(q);
-          await p.locator('#unifiedForm').evaluate(el=>el.requestSubmit());
+          await p.locator('#unifiedQuery').press('Enter');
           await p.waitForFunction(query=>{
             const text=document.querySelector('#unifiedStatus')?.textContent||'';
             return text.includes('عُثر على')&&text.includes(query);
@@ -134,6 +134,14 @@ try {
         await p.locator('#unifiedType').selectOption('all');
         await submit('القيس','الشعراء');
         await submit('قفا','القصائد');
+        // Exercise actual pointer navigation to a published poem and browser Back.
+        const poemLink=p.locator('.unified-result').filter({hasText:'القصائد'}).first();
+        safe((await poemLink.count())===1,'poem card missing before navigation '+v.id);
+        await poemLink.click();
+        await p.waitForURL(/\/poem\.html\?slug=/,{timeout:20000});
+        safe((await p.locator('h1').count())>=1,'poem detail missing heading '+v.id);
+        await p.goBack({waitUntil:'domcontentloaded',timeout:25000});
+        safe(p.url().includes('/search.html'),'search back navigation '+v.id);
         await submit('فلاوجودلهذاالاختبار',null);
         safe((await p.locator('.unified-empty').count())===1,'empty state '+v.id);
         safe(errors.length===0,'search JavaScript '+v.id);
@@ -155,7 +163,7 @@ const summary=[
   '- Values **are lab observations, not real iPhone/Android measurements or CrUX field Core Web Vitals**',
   '- 12 pages × 3 viewport profiles = '+rows.length+' navigation scenarios; '+violations.length+' axe rule occurrences across 14 WCAG screens',
   '- WCAG rule IDs: '+(axes.join(', ')||'none'),
-  '- Search: books/poets/poems/filter/empty states on mobile and desktop; synthetic response timings, not INP',
+  '- Search: keyboard Enter submits, real poem-card click/back, books/poets/poems/filter/empty states on mobile and desktop; synthetic response timings, not INP',
   '| Viewport | Screens | Median lab LCP ms* | Median lab CLS | Median transfer KiB* | Median DCL ms |',
   '|---|---:|---:|---:|---:|---:|',
   ...viewports.map(v=>{
