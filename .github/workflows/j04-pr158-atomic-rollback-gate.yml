@@ -2,7 +2,7 @@ name: J04 PR158 atomic offline snapshot import rollback tests
 on:
   push:
     branches: [main]
-    paths: [".github/workflows/j04-pr158-offline-d1-parity-gate.yml"]
+    paths: [".github/workflows/j04-pr158-atomic-rollback-gate.yml"]
 permissions:
   contents: read
 jobs:
