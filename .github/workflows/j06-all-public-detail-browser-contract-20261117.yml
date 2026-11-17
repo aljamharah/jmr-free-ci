@@ -96,7 +96,11 @@ jobs:
             checks++;
             const nested=base+'/poet.html?slug=al-mutanabbi&from='+encodeURIComponent('catalog.html?group=poets&item=syria');
             await page.goto(nested,{waitUntil:'domcontentloaded'});
-            await page.waitForFunction(()=>document.querySelector('#profileHero h1')?.textContent?.length>4);
+            const expectedPoet=poets.find(p=>p.slug==='al-mutanabbi');
+            assert.ok(expectedPoet,'Required published poet missing');
+            await page.waitForFunction(name=>
+              document.querySelector('#profileHero h1')?.textContent===name,expectedPoet.name_ar,{timeout:16000});
+            await page.locator('#poemList a.poem-card').first().waitFor({state:'visible',timeout:16000});
             const poemLink=page.locator('#poemList a.poem-card').first();
             ok((await poemLink.count())===1,'Expected linked poem for navigation round trip');
             const nestedUrl=await poemLink.getAttribute('href');
