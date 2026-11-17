@@ -76,6 +76,10 @@ jobs:
         working-directory: private-source
         run: node scripts/validate_jmr_quran.mjs
 
+      - name: Generate sanitized public indexes before source tests
+        working-directory: private-source
+        run: node scripts/build_public_site.mjs
+
       - name: Run private JMR API and Quran tests
         working-directory: private-source
         run: npm test
