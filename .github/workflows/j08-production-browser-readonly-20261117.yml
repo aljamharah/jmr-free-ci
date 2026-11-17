@@ -1,0 +1,98 @@
+name: J08 production responsive browser and navigation audit (GET only)
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j08-production-browser-readonly-20261117.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: j08-readonly-production-browser-20261117
+  cancel-in-progress: false
+
+jobs:
+  browser:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install isolated Playwright browser dependencies
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/jmr-browser"
+          cd "$RUNNER_TEMP/jmr-browser"
+          npm install --no-audit --no-fund --no-save --package-lock=false playwright@1.56.1 > /dev/null
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            npx playwright install chromium > /dev/null
+          fi
+      - name: Assert production responsive and RTL navigation without POST or AI
+        shell: bash
+        env:
+          TARGET: https://aljamharah.pages.dev
+        run: |
+          cd "$RUNNER_TEMP/jmr-browser"
+          node --input-type=module <<'NODE'
+          import {chromium} from "playwright";
+          import {appendFileSync} from "node:fs";
+          const origin=new URL(process.env.TARGET);
+          if(origin.origin!=="https://aljamharah.pages.dev")throw Error("Unexpected origin");
+          const pages=[
+            "index.html","catalog.html","lexicon.html","library.html",
+            "poets.html","poet.html","poem.html","search.html","book.html","reader.html","jmr.html","privacy.html"
+          ];
+          const widths=[320,390,1280];
+          let checks=0,failures=0;
+          const findings=[];
+          let browser;
+          try{
+            try{browser=await chromium.launch({channel:"chrome",headless:true,args:["--no-sandbox"]});}
+            catch{browser=await chromium.launch({headless:true,args:["--no-sandbox"]});}
+            for(const width of widths){
+              const context=await browser.newContext({viewport:{width,height:844},locale:"ar",reducedMotion:"reduce",deviceScaleFactor:1});
+              await context.route("**/*",route=>{
+                const req=route.request();
+                const u=new URL(req.url());
+                if(u.hostname!==origin.hostname||req.method()!=="GET")return route.abort();
+                return route.continue();
+              });
+              for(const path of pages){
+                const page=await context.newPage();
+                const jsErrors=[];
+                page.on("pageerror",e=>jsErrors.push(e.message));
+                let good=true,detail="ok";
+                try{
+                  const response=await page.goto(origin.origin+"/"+path,{waitUntil:"domcontentloaded",timeout:25000});
+                  const title=await page.title();
+                  const dir=await page.locator("html").getAttribute("dir");
+                  const dims=await page.evaluate(()=>({
+                    overflow:document.documentElement.scrollWidth-innerWidth,
+                    bodyWidth:document.body?.scrollWidth||0,
+                    h1:document.querySelectorAll("h1").length
+                  }));
+                  good=response?.status()===200 && title.trim().length>0 && dir==="rtl" &&
+                    dims.overflow<=6 && jsErrors.length===0;
+                  detail=good?"ok":JSON.stringify({status:response?.status(),rtl:dir,overflow:Math.ceil(dims.overflow),scriptErrors:jsErrors.length});
+                  if(path==="search.html"){
+                    const form=page.locator("#unifiedForm");
+                    const results=page.locator("#unifiedResults");
+                    good=good&&(await form.count()===1)&&(await results.count()===1);
+                  }
+                }catch(e){good=false;detail="browser-load-or-evaluation-error";}
+                checks++;
+                if(!good){failures++;findings.push(path+" @"+width+": "+detail);}
+                console.log("J08_BROWSER "+path+" width="+width+" "+(good?"PASS":"FAIL"));
+                await page.close();
+              }
+              await context.close();
+            }
+          }finally{if(browser)await browser.close();}
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            "### J-08 production responsive browser lab (not real devices)\n"+
+            "- Public GET-only Chromium, no JMR POST, no model or Cloudflare mutations\n"+
+            "- Viewport widths: 320/390/1280; pages: "+pages.length+"\n"+
+            "- Checks: "+checks+", passed: "+(checks-failures)+", failed: "+failures+"\n"+
+            "- Checks cover 200 HTML, RTL, title, horizontal overflow, fatal JS errors and search controls\n"+
+            "- No Core Web Vitals or physical-device certification from this test\n"+
+            (findings.length?"- Failed cases: "+findings.join("; ")+"\n":""));
+          console.log("J08_BROWSER_SUMMARY total="+checks+" failed="+failures);
+          if(failures)process.exitCode=1;
+          NODE
