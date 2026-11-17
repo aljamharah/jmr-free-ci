@@ -1,0 +1,119 @@
+name: Private PR 117-120 SHA-pinned source and static parity (no output leaks)
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/private-pr117-120-safe-parity-20261117.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-pr117-120-sha-locked-parity
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pr: 117
+            head: fa89ec56f029fc2f37e31c3ab2015933feb4a59a
+          - pr: 118
+            head: fbba604d188018ea5416e22b1d3fa730868897f9
+          - pr: 119
+            head: 7f2ae1d8202ee46e0bc6949015b54b00f1742b11
+          - pr: 120
+            head: ec7489c9599e9079ef958eccbedb382df0dc4adb
+    steps:
+      - name: Verify read-only source credential is configured
+        env:
+          SOURCE_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          test -n "$SOURCE_TOKEN" || { echo "::error::Missing private Contents Read credential"; exit 1; }
+
+      - name: Check out exact current-main baseline
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 43192946431d5b22d77bc41e830ff83de5999364
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+
+      - name: Check out exact candidate revision
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: ${{ matrix.head }}
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+
+      - name: Verify exact SHAs before running any source
+        env:
+          EXPECTED_HEAD: ${{ matrix.head }}
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = "43192946431d5b22d77bc41e830ff83de5999364"
+          test "$(git -C candidate rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "PINNED_REVISIONS_OK"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install free validation dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+
+      - name: Source, CMS, security, JMR and Node tests (output private)
+        working-directory: candidate
+        run: |
+          if node scripts/check_site_foundation.mjs > /tmp/pr-source-tests.log 2>&1; then
+            echo "SOURCE_GATE_PASS"
+          else
+            echo "::error::Private source gate failed; no confidential log contents are printed."
+            exit 1
+          fi
+
+      - name: Independent static builds and strict SHA256 parity
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs > /tmp/pr-baseline-build.log 2>&1) ||
+            { echo "::error::Baseline build failed"; exit 1; }
+          (cd candidate && node scripts/build_public_site.mjs > /tmp/pr-candidate-build.log 2>&1) ||
+            { echo "::error::Candidate build failed"; exit 1; }
+          if (cd candidate && node scripts/validation/compare-public-dist.mjs \
+              ../baseline/build-reports/dist-inventory.json \
+              build-reports/dist-inventory.json > /tmp/pr-parity.log 2>&1); then
+            echo "STATIC_DIST_PARITY_PASS"
+          else
+            echo "::error::Strict dist path/bytes/SHA256 parity failed; private diff hidden."
+            exit 1
+          fi
+
+      - name: Verify source unchanged, publish safe PASS summary
+        env:
+          PR: ${{ matrix.pr }}
+          HEAD_SHA: ${{ matrix.head }}
+        run: |
+          set -euo pipefail
+          git -C baseline diff --exit-code --quiet
+          git -C candidate diff --exit-code --quiet
+          echo "PR=$PR FULL_SOURCE_PASS STATIC_DIST_PARITY_PASS"
+          {
+            echo "### Private PR $PR exact SHA review"
+            echo "- Exact candidate ref was pinned against main 43192946431d"
+            echo "- Source, JMR and CMS tests: PASS"
+            echo "- Independent static dist path, bytes and SHA256 parity: PASS"
+            echo "- No private bodies, secret values, internal URLs or artifacts printed"
+            echo "- Advisory evidence only; recheck main and head before any merge"
+          } >> "$GITHUB_STEP_SUMMARY"
