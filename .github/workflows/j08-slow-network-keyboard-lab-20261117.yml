@@ -1,0 +1,106 @@
+name: J08 slow network keyboard and performance laboratory audit
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j08-slow-network-keyboard-lab-20261117.yml"]
+permissions:
+  contents: read
+jobs:
+  lab:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - name: Install disposable Playwright Chromium
+        run: |
+          mkdir -p "$RUNNER_TEMP/jmr-slow-network"
+          cd "$RUNNER_TEMP/jmr-slow-network"
+          npm install --no-audit --no-fund --no-save --package-lock=false playwright@1.56.1 > /dev/null
+          if ! command -v google-chrome >/dev/null 2>&1; then npx playwright install chromium > /dev/null; fi
+      - name: Simulate constrained mobile network and validate keyboard reachability
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/jmr-slow-network"
+          node --input-type=module <<'NODE'
+          import {chromium} from 'playwright';
+          import assert from 'node:assert/strict';
+          import {appendFileSync} from 'node:fs';
+          const origin='https://aljamharah.pages.dev';
+          const paths=['index.html','lexicon.html','search.html','library.html','jmr.html'];
+          let checks=0,failures=0,report=[];
+          let browser;
+          try{
+            try{browser=await chromium.launch({channel:'chrome',headless:true,args:['--no-sandbox']});}
+            catch{browser=await chromium.launch({headless:true,args:['--no-sandbox']});}
+            const context=await browser.newContext({viewport:{width:390,height:844},locale:'ar',reducedMotion:'reduce'});
+            await context.route('**/*',route=>{
+              const request=route.request();
+              const url=new URL(request.url());
+              return request.method()==='GET'&&url.origin===origin?route.continue():route.abort();
+            });
+            const page=await context.newPage();
+            const session=await context.newCDPSession(page);
+            await session.send('Network.enable');
+            await session.send('Network.emulateNetworkConditions',{
+              offline:false,latency:160,downloadThroughput:1.6*1024*1024/8,uploadThroughput:750*1024/8
+            });
+            await page.addInitScript(()=>{
+              window.__jmrVital={lcp:0,cls:0};
+              try{new PerformanceObserver(list=>{
+                for(const e of list.getEntries())window.__jmrVital.lcp=Math.round(e.startTime);
+              }).observe({type:'largest-contentful-paint',buffered:true});}catch{}
+              try{new PerformanceObserver(list=>{
+                for(const e of list.getEntries())if(!e.hadRecentInput)window.__jmrVital.cls+=e.value;
+              }).observe({type:'layout-shift',buffered:true});}catch{}
+            });
+            for(const path of paths){
+              const errors=[];
+              const handler=e=>errors.push(e.message);
+              page.on('pageerror',handler);
+              const started=Date.now();
+              let status=0,overflow=0,focus=false,metric={};
+              try{
+                const response=await page.goto(origin+'/'+path,{waitUntil:'domcontentloaded',timeout:35000});
+                await page.waitForTimeout(750);
+                status=response?.status()||0;
+                overflow=await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth);
+                await page.keyboard.press('Tab');
+                focus=await page.evaluate(()=>{
+                  const e=document.activeElement;
+                  return !!e && e!==document.body &&
+                    ['A','BUTTON','INPUT','SELECT','TEXTAREA'].includes(e.tagName);
+                });
+                metric=await page.evaluate(()=>({
+                  lcp:window.__jmrVital?.lcp||0,cls:Number((window.__jmrVital?.cls||0).toFixed(3)),
+                  resources:performance.getEntriesByType('resource').length,
+                  bytes:performance.getEntriesByType('resource').reduce((x,r)=>x+(r.transferSize||0),0)
+                }));
+              }catch(e){status=-1;}
+              page.off('pageerror',handler);
+              const passed=status===200&&overflow<=6&&errors.length===0&&focus;
+              checks++;
+              if(!passed)failures++;
+              report.push({page:path,status,focus,overflow:Math.round(overflow),errors:errors.length,
+                durationMs:Date.now()-started,...metric,passed});
+              console.log('J08_SLOW_LAB '+path+' '+(passed?'PASS':'FAIL')+
+                ' status='+status+' keyboard='+Number(focus)+' overflow='+Math.round(overflow)+
+                ' lcp_lab_ms='+(metric.lcp||0)+' cls_lab='+(metric.cls||0)+
+                ' transfer_bytes='+(metric.bytes||0));
+            }
+            await context.close();
+          }finally{if(browser)await browser.close();}
+          const summary=[
+            '### J-08 mobile slow-network and keyboard laboratory — 390px Chromium',
+            '- Connection: ~1.6Mbps simulated downstream, 160ms latency, same-origin public GET only',
+            '- Checks: '+checks+', failed: '+failures,
+            '- Covers 5 pages, first Tab focus, JavaScript errors, horizontal overflow and lab LCP/CLS',
+            '- Not a physical device; LCP/CLS values are lab estimates, not CrUX field data',
+            '| Page | Result | Keyboard focus | Lab LCP ms | Lab CLS | Transfer bytes |',
+            '|---|---|---|---:|---:|---:|',
+            ...report.map(x=>'| '+x.page+' | '+(x.passed?'PASS':'FAIL')+' | '+(x.focus?'yes':'no')+
+              ' | '+(x.lcp||0)+' | '+(x.cls||0)+' | '+(x.bytes||0)+' |')
+          ].join('\n')+'\n';
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,summary);
+          console.log('J08_SLOW_SUMMARY checks='+checks+' failures='+failures);
+          if(failures)process.exitCode=1;
+          NODE
