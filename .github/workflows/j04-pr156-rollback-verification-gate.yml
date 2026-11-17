@@ -1,0 +1,101 @@
+name: J04 PR156 isolated rollback and import retry gate
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j04-pr156-rollback-verification-gate.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Require existing read-only private contents credential
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: test -n "$TOKEN" || { echo "::error::Read-only token unavailable"; exit 1; }
+      - name: Checkout pinned baseline
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 43946f6564a15748153a1cd17f1ba54ac541e64a
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Checkout pinned candidate PR154
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: df536a02d6f159765c5ff72c79f6bf18e7d83903
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+          fetch-depth: 0
+      - name: Assert revision identity and no branch drift
+        run: |
+          test "$(git -C before rev-parse HEAD)" = "43946f6564a15748153a1cd17f1ba54ac541e64a"
+          test "$(git -C after rev-parse HEAD)" = "df536a02d6f159765c5ff72c79f6bf18e7d83903"
+      - name: Validate PR154 combined with current main without pushing
+        run: |
+          set -euo pipefail
+          git -C after config user.name "JMR CI isolated review"
+          git -C after config user.email "jmr-ci@users.noreply.github.com"
+          git -C after merge --no-gpg-sign --no-edit 43946f6564a15748153a1cd17f1ba54ac541e64a > /tmp/j04_virtual_merge.log 2>&1 ||
+            { echo "::error::PR154 conflicts with newer main; merge logs kept private"; exit 1; }
+          git -C after merge-base --is-ancestor 43946f6564a15748153a1cd17f1ba54ac541e64a HEAD
+          git -C after merge-base --is-ancestor df536a02d6f159765c5ff72c79f6bf18e7d83903 HEAD
+          echo "J04_VIRTUAL_MERGE_PASS"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install free source validators
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Test dynamic source parity and strict JSON book flags
+        working-directory: after
+        run: |
+          python -m unittest discover -s tests -p test_j04_d1_dry_run.py > /tmp/j04_private_unit.log 2>&1 ||
+            { echo "::error::J04 isolated SQLite parity or rights tests failed"; exit 1; }
+          echo "J04_UNIT_PASS"
+          python -m unittest discover -s tests -p test_j04_transaction_rollback.py > /tmp/j04_rollback_unit.log 2>&1 ||
+            { echo "::error::J04 SQLite rollback or retry regression failed"; exit 1; }
+          echo "J04_ROLLBACK_RETRY_PASS"
+          python scripts/j04_d1_dry_run.py > /tmp/j04_private_full_lexicon.log 2>&1 ||
+            { echo "::error::J04 10-part lexicon and source roundtrip failed"; exit 1; }
+          echo "J04_FULL_LEXICON_DRY_RUN_PASS"
+      - name: Run complete source and site validation
+        working-directory: after
+        run: |
+          node scripts/check_site_foundation.mjs > /tmp/j04_private_foundation.log 2>&1 ||
+            { echo "::error::Full foundation failed"; exit 1; }
+          echo "J04_FOUNDATION_PASS"
+      - name: Independently build baseline and PR154
+        run: |
+          (cd before && node scripts/build_public_site.mjs > /tmp/j04_before.log 2>&1) ||
+            { echo "::error::Baseline build failed"; exit 1; }
+          (cd after && node scripts/build_public_site.mjs > /tmp/j04_after.log 2>&1) ||
+            { echo "::error::Candidate build failed"; exit 1; }
+      - name: Require zero public file, hash or byte changes
+        working-directory: after
+        run: |
+          node scripts/validation/compare-public-dist.mjs ../before/build-reports/dist-inventory.json build-reports/dist-inventory.json > /tmp/j04_private_parity.log 2>&1 ||
+            { echo "::error::Unexpected public dist difference"; exit 1; }
+          echo "J04_STATIC_DIST_PARITY_PASS"
+      - name: Safe non-sensitive review summary
+        run: |
+          git -C before diff --exit-code --quiet
+          git -C after diff --exit-code --quiet
+          {
+            echo '### J04 full import rollback and retry under isolated SQLite'
+            echo '- Immutable private source revisions validated with read-only credential'
+            echo '- Current source counts and all provenance hashes validated in memory'
+            echo '- Full SQLite rollback, failed UNIQUE insert and clean retry: PASS'
+            echo '- Invalid JSON permission types and pending access denied'
+            echo '- 10 original lexicon parts verified without network or D1 writes'
+            echo '- Complete source and site checks passed'
+            echo '- Public static dist paths and SHA256 hashes identical'
+            echo '- No production SQL, Pages bindings, AI, data or files mutated'
+          } >> "$GITHUB_STEP_SUMMARY"
