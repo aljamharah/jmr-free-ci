@@ -38,6 +38,7 @@ jobs:
           assert.ok(token?.length>=12,'Missing existing Pages API read credential');
           const projects=['aljamharah','aljamharah-staging'],environments=['production','preview'];
           const tasks=new Map(),summaries={},seenIDs=new Set();
+          let configuredCustomDomains=0;
           const api='https://api.cloudflare.com/client/v4/accounts/'+account+'/pages/projects/';
           async function getCloudflare(path){
             const r=await fetch(api+path,{method:'GET',redirect:'error',headers:{
@@ -68,6 +69,12 @@ jobs:
             const metadata=(await getCloudflare(project)).result;
             if(metadata?.name!==project||metadata.build_config?.destination_dir!=='dist')
               throw Error('Unexpected Pages project build configuration');
+            const customDomains=await getCloudflare(project+'/domains');
+            if(!Array.isArray(customDomains.result)||
+               (Number.isSafeInteger(customDomains.result_info?.total_count)&&
+                customDomains.result_info.total_count!==customDomains.result.length))
+              throw Error('Pages custom-domain inventory incomplete');
+            configuredCustomDomains+=customDomains.result.length;
             for(const env of environments){
               const stat={listed:0,legacy_raw_root:0,alias_fields_not_reported:0,
                 reported_alias_entries:0,canonical_alias_skipped:0,unknown_hosts:0,
@@ -187,18 +194,24 @@ jobs:
             unique_checked_routes:work.length,
             total_checked_deployment_urls:metrics.verified_deployment_urls,
             total_checked_reported_alias_routes:metrics.verified_alias_routes,
-            unreported_alias_lists,unknown_hosts,
+            unreported_alias_lists,unknown_hosts,configured_custom_domains:configuredCustomDomains,
             protection_results:metrics,per_project:outcomes,
             canonical_production_200:production_public,
             canonical_production_not_200:production_nonpublic,
             all_reported_urls_protected:metrics.public_200===0&&metrics.unknown_redirect===0&&
               metrics.other_status===0&&metrics.network_error===0&&unknown_hosts===0&&
-              metrics.access_login===work.length&&metrics.access_denied===0,
+              metrics.access_login===work.length&&metrics.access_denied===0&&configuredCustomDomains===0,
             all_alias_urls_known:unreported_alias_lists===0,
             response_bodies_logged:false,hosts_ids_secrets_logged:false,
             cloudflare_mutations:0,ai_model_calls:0,
             historical_deletion_approved:false};
           console.log(JSON.stringify(report,null,2));
+          if(unreported_alias_lists>0)
+            console.log('::warning title=Unreported Pages alias fields::'+unreported_alias_lists+
+              ' deployments omit alias lists; total historical alias coverage remains unproven.');
+          if(configuredCustomDomains>0)
+            console.log('::error title=Unverified custom Pages domains::'+configuredCustomDomains+
+              ' custom domains require an independent Access audit.');
           if(!report.all_reported_urls_protected||production_public!==2)
             throw Error('Historical Access coverage or canonical production safety cannot be accepted');
           console.log('PASS: every API-reported hashed deployment and alias route tested is anonymous-blocked; canonical production is public. Unknown aliases remain unverified.');
