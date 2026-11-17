@@ -1,0 +1,85 @@
+name: J06 PR127 private source and static discovery gate
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j06-discovery-pr127-safe-gate.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: j06-pr127-pinned-source-gate
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Verify pre-existing private Contents Read credential
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          test -n "$TOKEN" || { echo "::error::Missing private read-only token"; exit 1; }
+      - name: Exact baseline
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 428e168200532f0b6504811c425f551b3cf74e8a
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Exact PR127 head
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 5b60cb26bd272e046b5d8843f29eed53dedfa6f5
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+      - name: Compare exact SHAs
+        run: |
+          set -euo pipefail
+          test "$(git -C before rev-parse HEAD)" = "428e168200532f0b6504811c425f551b3cf74e8a"
+          test "$(git -C after rev-parse HEAD)" = "5b60cb26bd272e046b5d8843f29eed53dedfa6f5"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install free site validators
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Run new four discovery cases and full foundation
+        working-directory: after
+        run: |
+          node --test tests/j06-discovery-sitemap-robots.test.mjs > /tmp/j06-tests.log 2>&1 ||
+            { echo "::error::New discovery tests failed"; exit 1; }
+          echo "J06_DISCOVERY_4_PASS"
+          node scripts/check_site_foundation.mjs > /tmp/j06-foundation.log 2>&1 ||
+            { echo "::error::Full foundation tests failed"; exit 1; }
+          echo "J06_FULL_FOUNDATION_PASS"
+      - name: Build two independent public dist inventories
+        run: |
+          (cd before && node scripts/build_public_site.mjs > /tmp/j06-before.log 2>&1) ||
+            { echo "::error::Baseline static build failed"; exit 1; }
+          (cd after && node scripts/build_public_site.mjs > /tmp/j06-after.log 2>&1) ||
+            { echo "::error::Candidate static build failed"; exit 1; }
+      - name: Check strict path, byte and hash parity
+        working-directory: after
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../before/build-reports/dist-inventory.json build-reports/dist-inventory.json \
+            > /tmp/j06-parity.log 2>&1 ||
+            { echo "::error::Unexpected changes in public dist"; exit 1; }
+          echo "J06_STATIC_PARITY_PASS"
+      - name: Report only minimal pass status
+        run: |
+          git -C before diff --exit-code --quiet
+          git -C after diff --exit-code --quiet
+          {
+            echo "### J06 canonical discovery gate for PR #127"
+            echo "- Pinned private SHA base/head and read-only token: PASS"
+            echo "- 4 new sitemap/robots/privacy tests: PASS"
+            echo "- All current source and CMS tests: PASS"
+            echo "- Static public dist paths, bytes and SHA256: IDENTICAL"
+            echo "- No private content, secrets or deployment URL histories were printed"
+          } >> "$GITHUB_STEP_SUMMARY"
