@@ -1,0 +1,88 @@
+name: J04 offline SQLite parity at pinned private main (no D1 access)
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/j04-local-d1-parity-current-main-20261117.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Require existing read-only credential
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          test -n "$TOKEN" || { echo "::error::Missing read-only token"; exit 1; }
+
+      - name: Check out exact current private main read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 9ec4fd54f68d13d6d244bf0a3b7d85718a1c8d9b
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: source
+
+      - name: Assert pinned SHA
+        run: |
+          test "$(git -C source rev-parse HEAD)" = "9ec4fd54f68d13d6d244bf0a3b7d85718a1c8d9b"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run 5 pure-memory D1 parity unit cases without printing private records
+        working-directory: source
+        run: |
+          if python -m unittest discover -s tests -p 'test_j04_d1_dry_run.py' > /tmp/j04_unit_private.log 2>&1; then
+            echo "J04_SQLITE_UNIT_TESTS_PASS"
+          else
+            echo "::error::J04 local SQLite unit test failed; hidden log contains private output."
+            exit 1
+          fi
+
+      - name: Compare all 10 original lexicon chunks and 35 JSON records in isolated memory
+        working-directory: source
+        run: |
+          set -euo pipefail
+          python scripts/j04_d1_dry_run.py > /tmp/j04_private_report.json 2>/tmp/j04_private_error.log ||
+            { echo "::error::J04 offline roundtrip failed; private log not printed."; exit 1; }
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('/tmp/j04_private_report.json').read_text(encoding='utf8'))
+          expected={
+            'sqlite_mode':'memory_only_no_d1_access',
+            'staged_poets':13,
+            'staged_poems':13,
+            'staged_books':9,
+            'roundtrip_records_verified':35,
+            'foreign_key_violations':0,
+            'original_lexicon_parts_verified':10,
+            'lexicon_entries_verified':20738
+          }
+          for k,v in expected.items():
+            if d.get(k)!=v:
+              raise SystemExit('J04 count or integrity mismatch: '+k)
+          print('J04_OFFLINE_ROUNDTRIP_PASS: 13 poets / 13 poems / 9 books, 35/35 records, 10/10 lexicon parts, 20738 entries, FK errors 0')
+          PY
+
+      - name: Verify tracked source unchanged and publish safe summary
+        run: |
+          set -euo pipefail
+          git -C source diff --exit-code --quiet
+          {
+            echo "### J-04 offline parity at pinned private main"
+            echo "- 5 sqlite3 in-memory unit tests: PASS"
+            echo "- 35/35 source records roundtripped, foreign-key violations: 0"
+            echo "- 10 original lexicon chunks, 20738 indexed entries: verified"
+            echo "- No remote D1 query/write, Cloudflare mutation or model request"
+            echo "- No source files, secrets, database row values or artifacts uploaded"
+            echo "- This is NOT approval for a D1 production migration"
+          } >> "$GITHUB_STEP_SUMMARY"
