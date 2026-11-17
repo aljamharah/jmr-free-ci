@@ -1,0 +1,98 @@
+name: J04 current private main offline rollback preflight
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j04-current-main-offline-rollback.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Require existing private source read credential
+        env:
+          PRIVATE_READ_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: test -n "$PRIVATE_READ_TOKEN" || { echo "::error::Private read token absent"; exit 1; }
+      - name: Checkout current private main (credentials not retained)
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: main
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compare source schema and initial migration in isolated SQLite
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sqlite3
+          from pathlib import Path
+          def signature(path):
+              db=sqlite3.connect(":memory:")
+              try:
+                  db.executescript(Path(path).read_text(encoding="utf8"))
+                  tables=sorted(x[0] for x in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"))
+                  return [(name,db.execute('PRAGMA table_info("'+name+'")').fetchall(),db.execute('PRAGMA foreign_key_list("'+name+'")').fetchall()) for name in tables]
+              finally:
+                  db.close()
+          assert signature("database/schema.sql")==signature("database/migrations/0001_initial.sql"),"schema/migration mismatch"
+          print("J04_LOCAL_INITIAL_SCHEMA_PARITY_PASS")
+          PY
+      - name: Run all current private J04 tests with no external D1 network
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test_j04_*.py' > "$RUNNER_TEMP/j04_private_test_log" 2>&1 ||
+            { echo "::error::J04 offline tests failed (private details withheld)"; exit 1; }
+          python - <<'PY'
+          import os,re
+          s=open(os.environ["RUNNER_TEMP"]+"/j04_private_test_log",encoding="utf8").read()
+          count=re.findall(r"Ran (\d+) tests",s)
+          if not count:raise SystemExit("No test result")
+          print("J04_PRIVATE_OFFLINE_TESTS_PASS cases="+count[-1])
+          PY
+      - name: Revalidate ten original lexicon parts and private JSON roundtrip dynamically
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/j04_d1_dry_run.py > "$RUNNER_TEMP/j04_private_summary.json" 2> "$RUNNER_TEMP/j04_private_error" ||
+            { echo "::error::J04 full dry-run failed (private details withheld)"; exit 1; }
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          d=json.loads((Path(os.environ["RUNNER_TEMP"])/"j04_private_summary.json").read_text(encoding="utf8"))
+          k=("staged_poets","staged_poems","staged_books")
+          assert all(type(d.get(i)) is int and d[i]>0 for i in k),"missing source cohort"
+          assert d.get("roundtrip_records_verified")==sum(d[i] for i in k),"source parity"
+          assert d.get("foreign_key_violations")==0,"invalid FK"
+          assert d.get("original_lexicon_parts_verified")==10,"missing lexicon source parts"
+          assert d.get("lexicon_entries_verified",0)>0,"missing lexicon entries"
+          assert d.get("sqlite_mode")=="memory_only_no_d1_access","external DB used"
+          print("J04_CURRENT_SOURCE_PASS poets="+str(d[k[0]])+" poems="+str(d[k[1]])+
+                " books="+str(d[k[2]])+" verified="+str(d["roundtrip_records_verified"])+
+                " lexicon_entries="+str(d["lexicon_entries_verified"])+" foreign_keys=0")
+          PY
+      - name: Require unchanged private checkout and publish aggregate evidence only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C source diff --exit-code --quiet
+          git -C source diff --cached --exit-code --quiet
+          sha="$(git -C source rev-parse HEAD)"
+          {
+            echo "### J04 current private main isolated SQLite preflight"
+            echo "- Tested private main SHA: $sha"
+            echo "- Schema vs initial migration parity, dynamic J04 unit/rollback/pagination, 10-part source: PASS"
+            echo "- Source remained unchanged; no remote D1, API, Cloudflare binding, model or database write"
+            echo "- **Does NOT prove existing D1 schema compatibility or authorize live cutover/restore**"
+          } >> "$GITHUB_STEP_SUMMARY"
