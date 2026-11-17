@@ -154,7 +154,9 @@ jobs:
             }catch{}
             metrics[classification]++;
             if(!outcomes[t.project])outcomes[t.project]={verified:0,unverified:0};
-            const protectedNow=classification==='access_login'||classification==='access_denied';
+            // Generic HTTP 401/403 might be WAF/origin denial, not proof of Access.
+            // Only a verified Cloudflare Access login redirect establishes Access coverage.
+            const protectedNow=classification==='access_login';
             if(protectedNow){outcomes[t.project].verified++;
               if(t.type==='deployment')metrics.verified_deployment_urls++;
               else metrics.verified_alias_routes++;
