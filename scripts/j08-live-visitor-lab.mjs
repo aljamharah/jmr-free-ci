@@ -138,7 +138,7 @@ try {
         const poemLink=p.locator('.unified-result').filter({hasText:'القصائد'}).first();
         safe((await poemLink.count())===1,'poem card missing before navigation '+v.id);
         await poemLink.click();
-        await p.waitForURL(/\/poem\.html\?slug=/,{timeout:20000});
+        await p.waitForURL(/\/poem\.html\?slug=/,{waitUntil:'domcontentloaded',timeout:20000});
         safe((await p.locator('h1').count())>=1,'poem detail missing heading '+v.id);
         await p.goBack({waitUntil:'domcontentloaded',timeout:25000});
         safe(p.url().includes('/search.html'),'search back navigation '+v.id);
