@@ -1,0 +1,114 @@
+name: J01 J05 live Arabic search and lexicon cache browser regression
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j01-j05-live-browser-functional-20261117.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  live-browser:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install disposable Chromium
+        run: |
+          mkdir -p "$RUNNER_TEMP/jmr-live-search"
+          cd "$RUNNER_TEMP/jmr-live-search"
+          npm install --no-audit --no-fund --no-save --package-lock=false playwright@1.56.1 > /dev/null
+          if ! command -v google-chrome >/dev/null 2>&1; then npx playwright install chromium > /dev/null; fi
+      - name: Verify live Arabic results and bounded network usage, GET only
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/jmr-live-search"
+          node --input-type=module <<'NODE'
+          import {chromium} from 'playwright';
+          import assert from 'node:assert/strict';
+          import {appendFileSync} from 'node:fs';
+          const origin='https://aljamharah.pages.dev',hostname='aljamharah.pages.dev';
+          let checks=0;
+          const ok=(value,label)=>{assert.ok(value,label);checks++};
+          async function submit(page,query){
+            await page.locator('#unifiedQuery').fill(query);
+            await page.locator('#unifiedForm').evaluate(form=>form.requestSubmit());
+            await page.waitForFunction(q=>{
+              const s=document.querySelector('#unifiedStatus')?.textContent||'';
+              return s.includes('عُثر على')&&s.includes(q);
+            },query,{timeout:18000});
+            checks++;
+          }
+          let browser;
+          try{
+            try{browser=await chromium.launch({channel:'chrome',headless:true,args:['--no-sandbox']});}
+            catch{browser=await chromium.launch({headless:true,args:['--no-sandbox']});}
+            const context=await browser.newContext({viewport:{width:390,height:844},locale:'ar',reducedMotion:'reduce'});
+            await context.route('**/*',route=>{
+              const r=route.request(),u=new URL(r.url());
+              if(r.method()!=='GET'||u.hostname!==hostname||u.protocol!=='https:')return route.abort();
+              return route.continue();
+            });
+            const page=await context.newPage(), errors=[];
+            page.on('pageerror',e=>errors.push(e.message));
+            const response=await page.goto(origin+'/search.html',{waitUntil:'domcontentloaded',timeout:25000});
+            ok(response?.status()===200,'search status');
+            ok((await page.locator('html').getAttribute('dir'))==='rtl','search RTL');
+            await submit(page,'العروض');
+            ok((await page.locator('.unified-result .result-kind').allTextContents()).includes('الكتب'),'missing published books for عروض');
+            await page.locator('#unifiedType').selectOption('books');
+            ok((await page.locator('.unified-result').count())>0,'empty books filter');
+            ok((await page.locator('.unified-result .result-kind').allTextContents()).every(x=>x==='الكتب'),'books filter wrong kind');
+            ok(page.url().includes('type=books'),'filter URL');
+            await page.locator('#unifiedType').selectOption('all');
+            await submit(page,'القيس');
+            ok((await page.locator('.unified-result .result-kind').allTextContents()).includes('الشعراء'),'missing published poet');
+            await submit(page,'قفا');
+            ok((await page.locator('.unified-result .result-kind').allTextContents()).includes('القصائد'),'missing published poem');
+            await submit(page,'فلاوجودلهذاالاختبار');
+            ok((await page.locator('.unified-empty').count())===1,'empty-result feedback missing');
+            ok(errors.length===0,'search uncaught JavaScript error');
+            ok((await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth))<=6,'search horizontal overflow');
+            await page.close();
+            const cachePage=await context.newPage();
+            const counts={manifest:0,word:0,source:0};
+            cachePage.on('request',req=>{
+              const p=new URL(req.url()).pathname;
+              if(p.endsWith('/content/jmr/lexicon/manifest.json'))counts.manifest++;
+              if(p.endsWith('/content/jmr/lexicon/words_0627.json'))counts.word++;
+              if(/\/jamharah_lexicon_[0-9]+\.json$/.test(p))counts.source++;
+            });
+            await cachePage.goto(origin+'/search.html',{waitUntil:'domcontentloaded',timeout:25000});
+            for(const q of ['أدب','أخلاق','أسد'])await submit(cachePage,q);
+            ok(counts.manifest===1,'repeated manifest fetch');
+            ok(counts.word===1,'repeated same-prefix shard fetch');
+            ok(counts.source===0,'search fetched original source chunks');
+            const lab=await cachePage.evaluate(()=>{
+              const rows=performance.getEntriesByType('resource')
+                .filter(r=>new URL(r.name).origin===location.origin);
+              const nav=performance.getEntriesByType('navigation')[0];
+              return {resources:rows.length,bytes:rows.reduce((n,r)=>n+(r.transferSize||0),0),
+                dcl:Math.round(nav?.domContentLoadedEventEnd||0)};
+            });
+            await cachePage.close();
+            const lexPage=await context.newPage();
+            let original=0;
+            lexPage.on('request',r=>{if(/\/jamharah_lexicon_[0-9]+\.json$/.test(new URL(r.url()).pathname))original++;});
+            const lexResponse=await lexPage.goto(origin+'/lexicon.html',{waitUntil:'domcontentloaded',timeout:25000});
+            await lexPage.waitForTimeout(1000);
+            ok(lexResponse?.status()===200,'lexicon status');
+            ok(original===0,'initial lexicon requested source chunks');
+            ok((await lexPage.evaluate(()=>document.documentElement.scrollWidth-innerWidth))<=6,'lexicon overflow');
+            await lexPage.close();
+            await context.close();
+            console.log('J01_J05_BROWSER_PASS checks='+checks+' manifest='+counts.manifest+' word_shard='+counts.word+' original='+original+' resources='+lab.resources+' transfer_bytes='+lab.bytes+' dcl_ms='+lab.dcl);
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY,[
+              '### J01/J05 production live browser checks',
+              '- Chromium 390px Arabic RTL lab, public same-origin GET only; no JMR POST or models',
+              '- Queries for books, poets, poems, empty-result state, type filter and shareable URL: PASS',
+              '- Repeated same-prefix word queries: manifest '+counts.manifest+' and prefix shard '+counts.word+' request',
+              '- Initial lexicon original full source shard requests: '+original,
+              '- Lab same-origin transferSize bytes '+lab.bytes+', resource entries '+lab.resources+', DOMContentLoaded '+lab.dcl+' ms',
+              '- Assertion count '+checks+'; laboratory data, not physical phone or Core Web Vitals field data'
+            ].join('\n')+'\n');
+          } finally {if(browser)await browser.close();}
+          NODE
