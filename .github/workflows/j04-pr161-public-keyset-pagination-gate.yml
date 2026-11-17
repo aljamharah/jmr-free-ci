@@ -1,0 +1,102 @@
+name: J04 PR161 local public-view bounded keyset paging
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j04-pr161-public-keyset-pagination-gate.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Require existing read-only private contents credential
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: test -n "$TOKEN" || { echo "::error::Read-only token unavailable"; exit 1; }
+      - name: Checkout pinned baseline
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 9b4f29ef5fa0d549acbf521f2c7e948aef2ab2df
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Checkout pinned candidate PR161
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 19124595b293dabdcac2c745eef406effc7daaa7
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+          fetch-depth: 0
+      - name: Assert revision identity and no branch drift
+        run: |
+          test "$(git -C before rev-parse HEAD)" = "9b4f29ef5fa0d549acbf521f2c7e948aef2ab2df"
+          test "$(git -C after rev-parse HEAD)" = "19124595b293dabdcac2c745eef406effc7daaa7"
+      - name: Validate PR161 combined with current main without pushing
+        run: |
+          set -euo pipefail
+          git -C after config user.name "JMR CI isolated review"
+          git -C after config user.email "jmr-ci@users.noreply.github.com"
+          git -C after merge --no-gpg-sign --no-edit 9b4f29ef5fa0d549acbf521f2c7e948aef2ab2df > /tmp/j04_virtual_merge.log 2>&1 ||
+            { echo "::error::PR161 conflicts with newer main; merge logs kept private"; exit 1; }
+          git -C after merge-base --is-ancestor 9b4f29ef5fa0d549acbf521f2c7e948aef2ab2df HEAD
+          git -C after merge-base --is-ancestor 19124595b293dabdcac2c745eef406effc7daaa7 HEAD
+          echo "J04_VIRTUAL_MERGE_PASS"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install free source validators
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Test dynamic source parity and strict JSON book flags
+        working-directory: after
+        run: |
+          python -m unittest discover -s tests -p test_j04_d1_dry_run.py > /tmp/j04_private_unit.log 2>&1 ||
+            { echo "::error::J04 isolated SQLite parity or rights tests failed"; exit 1; }
+          echo "J04_UNIT_PASS"
+          python -m unittest discover -s tests -p test_j04_public_read_pagination.py > /tmp/j04_public_page_tests.log 2>&1 ||
+            { echo "::error::Bounded public view pagination failed"; exit 1; }
+          echo "J04_PUBLIC_KEYSET_PASS"
+          python scripts/j04_d1_dry_run.py > /tmp/j04_private_full_lexicon.log 2>&1 ||
+            { echo "::error::J04 10-part lexicon and source roundtrip failed"; exit 1; }
+          echo "J04_FULL_LEXICON_DRY_RUN_PASS"
+      - name: Run complete source and site validation
+        working-directory: after
+        run: |
+          node scripts/check_site_foundation.mjs > /tmp/j04_private_foundation.log 2>&1 ||
+            { echo "::error::Full foundation failed"; exit 1; }
+          echo "J04_FOUNDATION_PASS"
+      - name: Independently build baseline and PR161
+        run: |
+          (cd before && node scripts/build_public_site.mjs > /tmp/j04_before.log 2>&1) ||
+            { echo "::error::Baseline build failed"; exit 1; }
+          (cd after && node scripts/build_public_site.mjs > /tmp/j04_after.log 2>&1) ||
+            { echo "::error::Candidate build failed"; exit 1; }
+      - name: Require zero public file, hash or byte changes
+        working-directory: after
+        run: |
+          node scripts/validation/compare-public-dist.mjs ../before/build-reports/dist-inventory.json build-reports/dist-inventory.json > /tmp/j04_private_parity.log 2>&1 ||
+            { echo "::error::Unexpected public dist difference"; exit 1; }
+          echo "J04_STATIC_DIST_PARITY_PASS"
+      - name: Safe non-sensitive review summary
+        run: |
+          git -C before diff --exit-code --quiet
+          git -C after diff --exit-code --quiet
+          {
+            echo '### J04 atomic import, failure rollback and deterministic replay'
+            echo '- Immutable private source revisions validated with read-only credential'
+            echo '- Current source counts and all provenance hashes validated in memory'
+            echo '- Bounded cursor pagination across approved SQLite public views: PASS'
+            echo '- Draft/private field suppression and immutable reader connection: PASS'
+            echo '- Invalid JSON permission types and pending access denied'
+            echo '- 10 original lexicon parts verified without network or D1 writes'
+            echo '- Complete source and site checks passed'
+            echo '- Public static dist paths and SHA256 hashes identical'
+            echo '- No production SQL, Pages bindings, AI, data or files mutated'
+          } >> "$GITHUB_STEP_SUMMARY"
