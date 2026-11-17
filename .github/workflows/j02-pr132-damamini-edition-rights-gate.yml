@@ -1,0 +1,94 @@
+name: J02 PR132 Damamini bibliography rights and public JSON diff gate
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j02-pr132-damamini-edition-rights-gate.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require existing private contents read token
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: test -n "$TOKEN" || { echo "::error::Read-only token unavailable"; exit 1; }
+      - name: Pinned baseline source
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: b1d15d5954c1c4a645992b0df1c68506237f1de6
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Pinned candidate source
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: d682572c9f01be15878daa9b547775fcafd7b27c
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+      - name: Assert immutable refs
+        run: |
+          set -euo pipefail
+          test "$(git -C before rev-parse HEAD)" = "b1d15d5954c1c4a645992b0df1c68506237f1de6"
+          test "$(git -C after rev-parse HEAD)" = "d682572c9f01be15878daa9b547775fcafd7b27c"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install free source test dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Verify cited metadata and rights then full foundation
+        working-directory: after
+        run: |
+          node --test tests/editorial/j02-damamini-edition-rights.test.mjs > /tmp/j02_priv_unit.log 2>&1 ||
+            { echo "::error::Edition or rights regression test failed"; exit 1; }
+          echo "J02_DAMAMINI_UNIT_PASS"
+          node scripts/check_site_foundation.mjs > /tmp/j02_private_foundation.log 2>&1 ||
+            { echo "::error::Full source foundation failed"; exit 1; }
+          echo "J02_FULL_FOUNDATION_PASS"
+      - name: Build isolated public outputs
+        run: |
+          (cd before && node scripts/build_public_site.mjs > /tmp/j02_before_build.log 2>&1) ||
+            { echo "::error::Baseline static build failed"; exit 1; }
+          (cd after && node scripts/build_public_site.mjs > /tmp/j02_after_build.log 2>&1) ||
+            { echo "::error::Candidate static build failed"; exit 1; }
+      - name: Restrict public changes to one bibliographic record
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          import {compareInventories} from './after/scripts/validation/compare-public-dist.mjs';
+          const before=JSON.parse(readFileSync('before/build-reports/dist-inventory.json','utf8'));
+          const after=JSON.parse(readFileSync('after/build-reports/dist-inventory.json','utf8'));
+          const diff=compareInventories(before,after);
+          const expected='content/books/records/damamini-uyun-ghamiza.json';
+          if(diff.added.length||diff.removed.length||diff.modified.length!==1||
+             diff.modified[0].path!==expected||diff.beforeCount!==diff.afterCount)
+            throw Error('Unexpected public assets; diff details intentionally withheld');
+          const r=JSON.parse(readFileSync('after/dist/'+expected,'utf8'));
+          if(r.edition!=='الطبعة الثانية'||r.publication_year!=='1415هـ / 1994م'||
+             r.rights_status!=='pending_review'||r.rights_basis_verified!==false||
+             r.reading_allowed!==false||r.download_allowed!==false||
+             r.external_embed_allowed!==false||r.text_content!==''||
+             r.pdf_url!==''||r.external_embed_url!=='')
+            throw Error('Bibliographic field or publisher authorization mismatch');
+          console.log('J02_DAMAMINI_PUBLIC_DIFF_PASS');
+          NODE
+      - name: Minimal summary
+        run: |
+          git -C before diff --exit-code --quiet
+          git -C after diff --exit-code --quiet
+          {
+            echo '### J-02 PR132 second-edition metadata verified'
+            echo '- Exact private SHAs pinned and read-only'
+            echo '- Source, editorial and reader rights tests: PASS'
+            echo '- Public JSON diff limited to one book; no paths added/removed'
+            echo '- Rights remain pending; no PDF, text, AI, D1 or Cloudflare mutation'
+            echo '- Recheck latest main, PR head, and Preview prior to merge'
+          } >> "$GITHUB_STEP_SUMMARY"
