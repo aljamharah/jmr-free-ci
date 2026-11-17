@@ -25,7 +25,16 @@ jobs:
               'invalid public path');
             const url=new URL(path,origin);
             check(url.origin===origin,'unexpected fetch origin');
-            const response=await fetch(url,{method:'GET',redirect:'manual',signal:AbortSignal.timeout(18000)});
+            let current=url,response;
+            for(let hop=0;hop<3;hop++){
+              response=await fetch(current,{method:'GET',redirect:'manual',signal:AbortSignal.timeout(18000)});
+              if(![301,302,307,308].includes(response.status))break;
+              const location=response.headers.get('location');
+              check(!!location,'missing canonical redirect target');
+              const next=new URL(location,current);
+              check(next.origin===origin && next.protocol==='https:','unsafe external redirect');
+              current=next;
+            }
             check(response.status===200,'unexpected HTTP '+response.status+' on known public path '+path);
             return {type:response.headers.get('content-type')||'',body:await response.text()};
           }
