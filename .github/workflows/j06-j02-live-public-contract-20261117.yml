@@ -50,15 +50,17 @@ jobs:
           const poets=(await json('/content/poets.json')).poets;
           const poems=(await json('/content/poems.json')).poems;
           const books=(await json('/content/books/index.json')).books;
-          check(Array.isArray(poets)&&poets.length===13,'published poet count changed');
-          check(Array.isArray(poems)&&poems.length===11,'published poem count changed');
-          check(Array.isArray(books)&&books.length===9,'bibliographic index count changed');
+          check(Array.isArray(poets)&&poets.length>=13,'published poet count dropped below reviewed floor 13');
+          check(Array.isArray(poems)&&poems.length>=34,'published poem count dropped below reviewed floor 34');
+          check(Array.isArray(books)&&books.length>=12,'bibliographic index count dropped below reviewed floor 12');
           const groups=taxonomy.groups||[];
           const eras=new Set(groups.find(g=>g.id==='eras')?.items.map(x=>x.id)||[]);
           const states=new Set(groups.find(g=>g.id==='poets')?.items.find(x=>x.id==='states')?.items.map(x=>x.id)||[]);
           const cats=new Set(groups.find(g=>g.id==='arab-poetry')?.items.map(x=>x.id)||[]);
           const pmap=new Map(poets.map(p=>[p.slug,p]));
           check(pmap.size===poets.length,'duplicate public poets');
+          check(new Set(poems.map(p=>p.slug)).size===poems.length,'duplicate public poem slugs');
+          check(new Set(books.map(b=>b.id)).size===books.length,'duplicate public book ids');
           for(const p of poets){
             check(p.publication_status==='published'&&eras.has(p.era_id)&&states.has(p.state_id),
               'invalid public poet status/taxonomy');
@@ -89,6 +91,23 @@ jobs:
               'unapproved book display/download/embed');
             check(!r.text_content&&!r.pdf_url&&!r.external_embed_url&&!r.text_download_url,
               'restricted book file link exposed');
+            const item=String(r.archive_item_url||'');
+            const preview=String(r.archive_embed_preview_url||'');
+            const remotePdfs=[r.archive_pdf_source_url,r.archive_cover_pdf_source_url].filter(Boolean);
+            if(item||preview||remotePdfs.length){
+              const match=/^https:\/\/archive\.org\/details\/([A-Za-z0-9][A-Za-z0-9._-]{0,100})$/.exec(item);
+              check(!!match,'invalid original Archive item URL');
+              check(preview==='https://archive.org/embed/'+match[1],
+                'Archive embed is not paired with the original item');
+              for(const source of remotePdfs){
+                const u=new URL(source);
+                check(u.protocol==='https:'&&u.hostname==='archive.org'&&
+                  u.pathname.startsWith('/download/'+match[1]+'/')&&
+                  /\/[A-Za-z0-9][A-Za-z0-9._-]{0,160}\.pdf$/.test(u.pathname)&&
+                  !u.username&&!u.password&&!u.search&&!u.hash,
+                  'Archive PDF source URL is not same-item HTTPS');
+              }
+            }
           }
           for(const page of ['index.html','catalog.html','lexicon.html','library.html','search.html',
                              'poets.html','poet.html','poem.html','book.html','reader.html',
@@ -126,14 +145,14 @@ jobs:
             check(target.type.includes('text/html')&&target.body===canary.body,
               'private source path not same as unknown HTML fallback');
           }
-          console.log('J06_J02_LIVE_CONTRACT_PASS poets=13 poems=11 books=9 pages=12 zero_unapproved_content');
+          console.log('J06_J02_LIVE_CONTRACT_PASS poets='+poets.length+' poems='+poems.length+' books='+books.length+' pages=12 rights_guarded=1');
           appendFileSync(process.env.GITHUB_STEP_SUMMARY,
             '### J-06 and J-02 public contract on latest production\n'+
             '- Public GET only, no private source/token and no POST/AI\n'+
-            '- Published poets: 13, poems: 11, metadata-only books: 9\n'+
+            '- Published poets: '+poets.length+', poems: '+poems.length+', books: '+books.length+' (reviewed floors 13/34/12)\n'+
             '- 12 HTML pages reachable; canonical sitemap and robots aligned, privacy noindex remains\n'+
             '- Taxonomy and author relationships: valid; draft/private rights fields absent\n'+
-            '- Books have pending review, no reading/download/embed permissions\n'+
+            '- Pending book rights have no local reading/download/embed; Archive links must be original and same-item\n'+
             '- Checks evaluated: '+count+'; no confidential content logged\n'+
             '- Not a copyright legal assessment or real-device test\n');
           NODE
