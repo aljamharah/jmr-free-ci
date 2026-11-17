@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: b1d15d5954c1c4a645992b0df1c68506237f1de6
+          ref: 154143d8d1256e720d97e1ed42fb291eebee0ad9
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: before
@@ -31,11 +31,22 @@ jobs:
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: after
+          fetch-depth: 0
       - name: Assert immutable refs
         run: |
           set -euo pipefail
-          test "$(git -C before rev-parse HEAD)" = "b1d15d5954c1c4a645992b0df1c68506237f1de6"
+          test "$(git -C before rev-parse HEAD)" = "154143d8d1256e720d97e1ed42fb291eebee0ad9"
           test "$(git -C after rev-parse HEAD)" = "3414c599ef52e1823aa6fc14598f60e3f29608db"
+      - name: Validate non-pushing merge onto current healthy main
+        run: |
+          set -euo pipefail
+          git -C after config user.name "JMR CI local review"
+          git -C after config user.email "jmr-ci@users.noreply.github.com"
+          git -C after merge --no-gpg-sign --no-edit 154143d8d1256e720d97e1ed42fb291eebee0ad9 > /tmp/j02_virtual_merge.log 2>&1 ||
+            { echo "::error::Current main conflicts with PR132 changes"; exit 1; }
+          git -C after merge-base --is-ancestor 154143d8d1256e720d97e1ed42fb291eebee0ad9 HEAD
+          git -C after merge-base --is-ancestor 3414c599ef52e1823aa6fc14598f60e3f29608db HEAD
+          echo "J02_VIRTUAL_MERGE_PASS"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
