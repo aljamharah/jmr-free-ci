@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: bfe15211f203981afd89186d96004b59ea03a2ee
+          ref: 3dadac05bde47e4fc7831dd739ca265d8c84f52f
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           path: before
@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C before rev-parse HEAD)" = "bfe15211f203981afd89186d96004b59ea03a2ee"
+          test "$(git -C before rev-parse HEAD)" = "3dadac05bde47e4fc7831dd739ca265d8c84f52f"
           test "$(git -C after rev-parse HEAD)" = "ef2caf727b6b8857ab2f56691ca0bc97f7ba8827"
           echo 'J04_IMMUTABLE_CANDIDATE_PASS'
       - uses: actions/setup-python@v5
@@ -143,7 +143,7 @@ jobs:
           git -C after diff --exit-code --quiet
           {
             echo '### J-04 PR182: existing Cloudflare D1 catalog preflight (read-only local tests)'
-            echo '- Tested private candidate ef2caf727b6b8857ab2f56691ca0bc97f7ba8827 and base bfe15211f203981afd89186d96004b59ea03a2ee'
+            echo '- Tested private candidate ef2caf727b6b8857ab2f56691ca0bc97f7ba8827 and base 3dadac05bde47e4fc7831dd739ca265d8c84f52f'
             echo '- Existing D1 link table schema differs from migration 0001: **NO-GO intentionally enforced**'
             echo '- Unit tests PASS; standalone compatibility guard explicitly rejects observed schema'
             echo '- Existing rollback and public keyset pagination unit suites PASS'
