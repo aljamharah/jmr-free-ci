@@ -1,0 +1,85 @@
+name: J02 J04 PR126 rights-basis guard pinned source and static parity
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j02-j04-rights-basis-pr126-20261117.yml"]
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    steps:
+      - name: Require existing private source read-only token
+        env:
+          TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: test -n "$TOKEN" || { echo "::error::Missing read-only credential"; exit 1; }
+      - name: Get pinned baseline source
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 20609578ba20979833dd1c233f9ec88c7ebcbf8a
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Get pinned candidate source
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: df01177f954a910a933ae8620172ae05935d349e
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+      - name: Confirm exact refs before executing source
+        run: |
+          set -euo pipefail
+          test "$(git -C before rev-parse HEAD)" = "20609578ba20979833dd1c233f9ec88c7ebcbf8a"
+          test "$(git -C after rev-parse HEAD)" = "df01177f954a910a933ae8620172ae05935d349e"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install free public source validators
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Validate SQLite rights gates in memory including negative fixtures
+        working-directory: after
+        run: |
+          python -m unittest discover -s tests -p 'test_j04_d1_dry_run.py' > /tmp/j04_rights_tests_private.log 2>&1 ||
+            { echo "::error::In-memory SQLite rights tests failed"; exit 1; }
+          echo "J04_RIGHTS_NEGATIVE_TESTS_PASS"
+      - name: Validate full site, editorial and privacy test suite
+        working-directory: after
+        run: |
+          node scripts/check_site_foundation.mjs > /tmp/j02_j04_candidate_tests.log 2>&1 ||
+            { echo "::error::Source regression failure, private logs withheld"; exit 1; }
+          echo "FULL_FOUNDATION_TESTS_PASS"
+      - name: Generate baseline and candidate public site independently
+        run: |
+          (cd before && node scripts/build_public_site.mjs > /tmp/j02j04_before.log 2>&1) ||
+            { echo "::error::Baseline build failed"; exit 1; }
+          (cd after && node scripts/build_public_site.mjs > /tmp/j02j04_after.log 2>&1) ||
+            { echo "::error::Candidate build failed"; exit 1; }
+      - name: Require byte-level and SHA256-identical public output
+        working-directory: after
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../before/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json > /tmp/j02j04_parity_private.log 2>&1 ||
+            { echo "::error::Public output drift detected"; exit 1; }
+          echo "PUBLIC_CONTENT_IDENTICAL"
+      - name: Publish narrow non-sensitive results
+        run: |
+          git -C before diff --exit-code --quiet
+          git -C after diff --exit-code --quiet
+          {
+            echo "### J02/J04 poem text rights guard, PR #126"
+            echo "- Exact source SHAs confirmed; readonly private repo fetch"
+            echo "- SQLite in-memory negative tests and full source test suite: PASS"
+            echo "- Static public output byte/path/SHA256 unchanged"
+            echo "- Future rights-status toggle alone cannot reveal body without nonblank basis"
+            echo "- This is defense-in-depth, not a legal rights certification"
+            echo "- No SQL to Cloudflare D1, no artifacts or private source output"
+          } >> "$GITHUB_STEP_SUMMARY"
