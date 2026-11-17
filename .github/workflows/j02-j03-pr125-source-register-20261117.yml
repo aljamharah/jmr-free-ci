@@ -1,0 +1,78 @@
+name: J02 J03 PR125 pinned private editorial register and dist parity
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/j02-j03-pr125-source-register-20261117.yml"]
+permissions:
+  contents: read
+jobs:
+  editorial:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - name: Require existing limited private read token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+        run: |
+          test -n "$PRIVATE_TOKEN" || { echo "::error::No read-only source credential"; exit 1; }
+      - name: Check out baseline exact SHA
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 3f7676ee8b9727d95aede5e563606209c6ad032a
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: before
+      - name: Check out candidate exact SHA
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: eaa29612267be25d440b5eed55c9f8c677c00215
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: after
+      - name: Confirm exact source references
+        run: |
+          test "$(git -C before rev-parse HEAD)" = "3f7676ee8b9727d95aede5e563606209c6ad032a"
+          test "$(git -C after rev-parse HEAD)" = "eaa29612267be25d440b5eed55c9f8c677c00215"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install available free validators
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Validate entire candidate source without exposing private logs
+        working-directory: after
+        run: |
+          node scripts/check_site_foundation.mjs > /tmp/editorial_tests_private.log 2>&1 ||
+            { echo "::error::Source validation failed"; exit 1; }
+          echo "EDITORIAL_SOURCE_PASS"
+      - name: Build baseline and candidate independent static outputs
+        run: |
+          (cd before && node scripts/build_public_site.mjs > /tmp/editorial_before_private.log 2>&1) ||
+            { echo "::error::Baseline build failed"; exit 1; }
+          (cd after && node scripts/build_public_site.mjs > /tmp/editorial_after_private.log 2>&1) ||
+            { echo "::error::Candidate build failed"; exit 1; }
+      - name: Assert exact public path byte hash parity
+        working-directory: after
+        run: |
+          node scripts/validation/compare-public-dist.mjs \
+            ../before/build-reports/dist-inventory.json \
+            build-reports/dist-inventory.json > /tmp/editorial_parity_private.log 2>&1 ||
+            { echo "::error::Public output changed unexpectedly"; exit 1; }
+          echo "EDITORIAL_DIST_IDENTICAL"
+      - name: Publish narrow public summary
+        run: |
+          git -C before diff --exit-code --quiet
+          git -C after diff --exit-code --quiet
+          {
+            echo "### J-02/J-03 editorial register PR #125"
+            echo "- Exact SHA checked with existing read-only credential"
+            echo "- Source checks and full static dist parity passed"
+            echo "- No public content/rights flags updated or published"
+            echo "- The register lists review tasks only; no book rights or historical facts certified"
+            echo "- No private source, artifacts or rights evidence uploaded to this public repository"
+          } >> "$GITHUB_STEP_SUMMARY"
