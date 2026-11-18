@@ -208,6 +208,39 @@ jobs:
             response_bodies_logged:false,hosts_ids_secrets_logged:false,
             cloudflare_mutations:0,ai_model_calls:0,
             historical_deletion_approved:false};
+          // Publish aggregate-only, reviewable evidence on the GitHub run summary.
+          // Never print URLs, Access identities, headers, tokens or response bodies.
+          if (process.env.GITHUB_STEP_SUMMARY) {
+            const {appendFile}=await import('node:fs/promises');
+            const partial=report.unreported_alias_lists>0;
+            const lines=[
+              '## SEC-01 — Historical Pages Access coverage',
+              '',
+              '**Scope: API-reported deployment URLs and alias routes only.**',
+              'A successful check does NOT prove that omitted historical aliases never existed,',
+              'nor does it establish whether material was accessed before Access was enabled.',
+              '',
+              '| Safe aggregate metric | Result |',
+              '| --- | ---: |',
+              '| Checked unique routes | '+report.unique_checked_routes+' |',
+              '| Verified Access login redirects | '+metrics.access_login+' |',
+              '| Public HTTP 200 on protected preview routes | '+metrics.public_200+' |',
+              '| Unverified routes (including network errors) | '+(work.length-metrics.access_login)+' |',
+              '| Deployment entries without an alias list | '+report.unreported_alias_lists+' |',
+              '| Unknown/unrecognized hosts | '+report.unknown_hosts+' |',
+              '| Configured Pages custom domains | '+report.configured_custom_domains+' |',
+              '| Expected canonical public roots returning 200 | '+report.canonical_production_200+' / 2 |',
+              '',
+              '**Reported-route coverage:** '+(report.all_reported_urls_protected?'PASS':'FAIL'),
+              '',
+              '**All historical aliases accounted for:** '+(partial?'NOT PROVEN':'API INVENTORY COMPLETE (not an external-history guarantee)'),
+              '',
+              'When coverage fails, review this workflow run promptly. Never publish historical URLs',
+              'or sensitive source snippets in public CI logs. Track remaining evidence in private SEC-01 #113.',
+              ''
+            ];
+            await appendFile(process.env.GITHUB_STEP_SUMMARY,lines.join('\n')+'\n');
+          }
           console.log(JSON.stringify(report,null,2));
           if(unreported_alias_lists>0)
             console.log('::warning title=Unreported Pages alias fields::'+unreported_alias_lists+
@@ -232,3 +265,13 @@ jobs:
           done
           echo '::error title=Cloudflare inventory unstable::3 complete snapshots failed due to concurrent changes; no protection verdict was issued.'
           exit 1
+
+      - name: Record unresolved SEC-01 coverage failure
+        if: failure()
+        run: |
+          echo '::error title=SEC-01 monitoring incomplete::Historic-preview protection has not been proven by this run; inspect the aggregated check and investigate before accepting an Access change.'
+          {
+            echo '### SEC-01 — coverage incomplete'
+            echo 'This run did not produce an acceptable coverage verdict. Do not interpret an earlier green check as coverage of new deployments.'
+            echo 'Review the failed step and private SEC-01 #113. Do not publish historical URLs or source excerpts in this public repository.'
+          } >> "$GITHUB_STEP_SUMMARY"
