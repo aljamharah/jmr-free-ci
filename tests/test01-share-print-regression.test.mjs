@@ -29,3 +29,11 @@ test('TEST-01 revised browser source is valid Node ESM',()=>{
   const result=spawnSync(process.execPath,['--check',file.pathname],{encoding:'utf8'});
   assert.equal(result.status,0,result.stderr);
 });
+
+test('TEST-01 live journey reruns on scripts as well as workflow edits',()=>{
+  const yaml=readFileSync(new URL('../.github/workflows/test01-live-content-journeys.yml',import.meta.url),'utf8');
+  assert.match(yaml,/branches:\s*\[main\]/);
+  assert.match(yaml,/paths:\s*\n\s+- "\.github\/workflows\/test01-live-content-journeys\.yml"\s*\n\s+- "scripts\/test01-live-content-journeys\.mjs"/);
+  assert.doesNotMatch(yaml,/^\s+pull_request_target:|^\s+schedule:/m);
+  assert.match(yaml,/permissions:\s*\n\s+contents: read/);
+});
