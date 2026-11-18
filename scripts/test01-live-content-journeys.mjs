@@ -5,7 +5,7 @@ import { appendFileSync } from 'node:fs';
 const BASE = 'https://aljamharah.pages.dev';
 const MAX_BOOKS = 50;
 const failures = [];
-const report = { book_records: 0, book_mobile: 0, book_desktop: 0, books_with_inline_frame: 0, books_with_text: 0, books_with_source_notice: 0, poem_actions: 0, model_calls: 0, external_frames_loaded: false };
+const report = { book_records: 0, book_mobile: 0, book_desktop: 0, books_with_inline_frame: 0, books_with_text: 0, books_with_source_notice: 0, poem_actions: 0, restricted_poem_checks: 0, model_calls: 0, external_frames_loaded: false };
 
 async function getJSON(path) {
   const url = new URL(path, BASE);
@@ -29,12 +29,17 @@ for (const entry of books) {
 }
 report.book_records = records.length;
 
-const publishedPoems = (await getJSON('/content/poems.json')).poems.filter(p =>
+const allPoems = (await getJSON('/content/poems.json')).poems;
+const publishedPoems = allPoems.filter(p =>
   p.publication_status === 'published' && p.text_status === 'local_text' &&
   ['public_domain', 'permission_granted'].includes(p.rights_status) &&
   typeof p.body === 'string' && /[\u064B-\u065F\u0670]/u.test(p.body)
 );
 assert.ok(publishedPoems.length >= 1, 'No eligible vowelled poem to test');
+const restrictedPoems=allPoems.filter(p => p.publication_status==='published' &&
+  !(p.text_status==='local_text' && ['public_domain','permission_granted'].includes(p.rights_status)));
+assert.ok(restrictedPoems.length>=1 && restrictedPoems.length<=100,
+  'No manageable published restricted-poem sample');
 
 let browser;
 try {
@@ -101,6 +106,24 @@ try {
           report.poem_actions++;
         }catch(e){failures.push('Poem sample #'+(i+1)+': '+String(e.message).slice(0,150));}
       }
+      for(const [i,poem] of restrictedPoems.slice(0,3).entries()){
+        try{
+          const response=await page.goto(BASE+'/poem.html?slug='+encodeURIComponent(poem.slug),
+            {waitUntil:'domcontentloaded',timeout:28000});
+          assert.equal(response?.status(),200);
+          await page.waitForFunction(title=>
+            document.querySelector('#poemHero h1')?.textContent===title,
+            poem.title,{timeout:15000});
+          const notice=await page.locator('#poemVerses').innerText();
+          assert.match(notice,/النص الكامل غير مستضاف في الجمهرة بعد/,
+            'Restricted poem needs a clear unhosted-text notice');
+          assert.equal(await page.locator('#poemVerses .verse-line').count(),0,
+            'Restricted poem must not show verse lines');
+          assert.equal(await page.locator('#actions').isHidden(),true,
+            'Restricted poem copy/print controls must not be visible');
+          report.restricted_poem_checks++;
+        }catch(e){failures.push('Restricted poem #'+(i+1)+': '+String(e.message).slice(0,170));}
+      }
     }
     await ctx.close();
     assert.equal(javascriptErrors.length,0,'Uncaught JavaScript errors for '+width+'px');
@@ -114,6 +137,7 @@ const summary=[
  '- Inline frame present per inspected book: '+report.books_with_inline_frame,
  '- Text-only reading state: '+report.books_with_text+', source/unavailable state: '+report.books_with_source_notice,
  '- Poem action samples (diacritics off/on, feedback, text preservation): '+report.poem_actions,
+ '- Restricted poems checked for notice, zero verses and hidden copy/print controls: '+report.restricted_poem_checks,
  '- Failures: '+failures.length,
  '- Not covered: third-party PDF render, rights provenance, actual iPhone/Android, color-glyph shape/harakat accuracy, model calls',
  ...(failures.length? ['- Failures (public row positions only): '+failures.slice(0,10).join('; ')]:[])
