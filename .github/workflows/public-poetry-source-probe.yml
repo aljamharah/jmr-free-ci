@@ -1,32 +1,45 @@
-name: Identify public poetry couplet wrappers
+name: Collect public-domain vowelled poetic lines for offline scholarly matching
 on:
   push:
     branches: [audit/poetry-voweled-sources-20261118]
 permissions: {contents: read}
 jobs:
-  inspect:
+  collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - name: Find correct DCT half-line selectors
+      - name: Extract source-only fully vowelled historical half-lines (no private data accessed)
         run: |
           python -m pip -q install requests beautifulsoup4
           python - <<'PY'
-          import requests,bs4,collections,json
-          url='https://poetry.dct.gov.ae/poems/286-على-قدر-أهل-العزم-تأتي-العزائم'
-          r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0'});r.encoding='utf-8';s=bs4.BeautifulSoup(r.text,'html.parser')
-          word=s.select_one('section.poem-body .word-search')
-          if word:
-            p=word
-            for n in range(8):
-              if not p:break
-              print('PARENT',n,json.dumps({'tag':p.name,'class':p.get('class'),'id':p.get('id'),'text':p.get_text(' ',strip=True)[:220],'html':str(p)[:1100]},ensure_ascii=False),flush=True)
-              p=p.parent
-          classes=collections.Counter()
-          for t in s.select_one('section.poem-body').find_all(True):
-            for cls in t.get('class') or []: classes[cls]+=1
-          print('CLASSES',classes.most_common(55))
+          import requests,bs4,json,re,time
+          urls={
+            'imru':'https://www.blfosha.net/poem/3000001',
+            'mutanabbi1':'https://www.blfosha.net/poem/3000020',
+            'mutanabbi2':'https://poetry.dct.gov.ae/poems/286-على-قدر-أهل-العزم-تأتي-العزائم'
+          }
+          for name,url in urls.items():
+            try:
+              resp=requests.get(url,timeout=24,headers={'User-Agent':'Mozilla/5.0'});resp.raise_for_status()
+              resp.encoding='utf-8';soup=bs4.BeautifulSoup(resp.text,'html.parser')
+              if name=='mutanabbi2':
+                lines=[]
+                for row in soup.select('section.poem-body tr.poem-verses'):
+                  parts=row.select('td.poem-verses__part')
+                  if len(parts)!=2:continue
+                  lines.extend([' '.join(word.get_text(' ',strip=True) for word in p.select('.word-search')) for p in parts])
+              else:
+                lines=[]
+                for bayt in soup.select('div.bf-poem div.bf-bayt'):
+                  p=bayt.select('span.bf-v')
+                  if len(p)!=2:continue
+                  lines.extend([x.get_text(' ',strip=True) for x in p])
+              print('EXTRACT',name,'LINES',len(lines),'FIRST',repr(lines[:2]),'LAST',repr(lines[-2:]),flush=True)
+              if lines and len(lines)%2==0:
+                print('PUBLIC_POEM_JSON',json.dumps({'key':name,'url':url,'lines':lines},ensure_ascii=False,separators=(',',':')),flush=True)
+            except Exception as e:print('FETCH_ERROR',name,str(e)[:150],flush=True)
+            time.sleep(.2)
           PY
