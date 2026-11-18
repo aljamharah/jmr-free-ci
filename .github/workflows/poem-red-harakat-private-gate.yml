@@ -1,0 +1,41 @@
+name: Cross-browser red Arabic harakat - private read-only site test
+on:
+  push:
+    branches:
+      - audit/poetry-red-harakat-20261118
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact private source read-only
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: dc49f3cf09bab16af2a33f49b63ea64d450a53d1
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install library validation dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Verify source SHA
+        run: test "$(git rev-parse HEAD)" = "dc49f3cf09bab16af2a33f49b63ea64d450a53d1"
+      - name: Verify every red diacritics rendering contract
+        run: node --test tests/poem-red-diacritics-no-heading.test.mjs tests/poem-reading-compact-height.test.mjs tests/poem-red-diacritics-runtime.test.mjs
+      - name: Full site validation and main test suite
+        run: |
+          python scripts/validate_library.py
+          node scripts/check_site_foundation.mjs
+          npm test
+      - name: Verify deploy-only sanitized site build
+        run: node scripts/build_public_site.mjs
+      - name: Ensure private source unchanged
+        run: git diff --exit-code -- poem.html tests/poem-red-diacritics-no-heading.test.mjs tests/poem-reading-compact-height.test.mjs tests/poem-red-diacritics-runtime.test.mjs
