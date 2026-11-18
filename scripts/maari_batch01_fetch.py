@@ -51,18 +51,16 @@ def main():
         "User-Agent": "JamharahLiteraryProject/1.0 (+read-only public-domain text study; low-frequency)",
         "Accept": "text/html,application/xhtml+xml"
     })
+    # Parse the public robots.txt content via the same identifiable HTTP session.
+    # RobotFileParser.read() uses a different default user-agent and can misinterpret
+    # upstream 403 responses as site-wide Disallow, even when robots.txt says Allow: /.
+    robots_response = session.get("https://almaarri.com/robots.txt", timeout=(10, 20))
+    robots_response.raise_for_status()
     robot = robotparser.RobotFileParser()
-    robot.set_url("https://almaarri.com/robots.txt")
-    try:
-        robot.read()
-        if not robot.can_fetch(session.headers["User-Agent"], "https://almaarri.com/poem/"):
-            # Python RobotFileParser for 404/403 may reject all: do not circumvent.
-            raise RuntimeError("Source robots policy does not permit /poem/ extraction.")
-    except RuntimeError:
-        raise
-    except Exception as ex:
-        print("robots.txt cannot be inspected; no automated harvesting without confirmation:",repr(ex))
-        sys.exit(2)
+    robot.parse(robots_response.text.splitlines())
+    if not robot.can_fetch(session.headers["User-Agent"], "https://almaarri.com/poem/example/"):
+        raise RuntimeError("Source robots policy does not permit /poem/ extraction.")
+    print("ROBOTS_OK", robots_response.status_code,flush=True)
 
     all_known = {normalize(h) for p in catalogue if p.get("batch_id") != BATCH
                  for h in (p.get("body") or "").splitlines() if h.strip()}
