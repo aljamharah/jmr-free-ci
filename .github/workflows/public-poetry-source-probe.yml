@@ -1,45 +1,36 @@
-name: Collect public-domain vowelled poetic lines for offline scholarly matching
+name: Find four classical source poems without private corpus access
 on:
   push:
     branches: [audit/poetry-voweled-sources-20261118]
 permissions: {contents: read}
 jobs:
-  collect:
+  locate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - name: Extract source-only fully vowelled historical half-lines (no private data accessed)
+      - name: Locate original poet-linked texts
         run: |
           python -m pip -q install requests beautifulsoup4
           python - <<'PY'
-          import requests,bs4,json,re,time
-          urls={
-            'imru':'https://www.blfosha.net/poem/3000001',
-            'mutanabbi1':'https://www.blfosha.net/poem/3000020',
-            'mutanabbi2':'https://poetry.dct.gov.ae/poems/286-على-قدر-أهل-العزم-تأتي-العزائم'
+          import re,json,requests,bs4,time
+          base='https://poetry.dct.gov.ae'
+          initial={
+           'tarafa':base+'/poets/354-طرفة-بن-العبد',
+           'zuhair':base+'/poets/355-زهير-بن-أبي-سلمى',
+           'labid-seed':base+'/poems/2397-',
+           'antar':base+'/poems/9850-هل-غادر-الشعراء-من-متردم'
           }
-          for name,url in urls.items():
-            try:
-              resp=requests.get(url,timeout=24,headers={'User-Agent':'Mozilla/5.0'});resp.raise_for_status()
-              resp.encoding='utf-8';soup=bs4.BeautifulSoup(resp.text,'html.parser')
-              if name=='mutanabbi2':
-                lines=[]
-                for row in soup.select('section.poem-body tr.poem-verses'):
-                  parts=row.select('td.poem-verses__part')
-                  if len(parts)!=2:continue
-                  lines.extend([' '.join(word.get_text(' ',strip=True) for word in p.select('.word-search')) for p in parts])
-              else:
-                lines=[]
-                for bayt in soup.select('div.bf-poem div.bf-bayt'):
-                  p=bayt.select('span.bf-v')
-                  if len(p)!=2:continue
-                  lines.extend([x.get_text(' ',strip=True) for x in p])
-              print('EXTRACT',name,'LINES',len(lines),'FIRST',repr(lines[:2]),'LAST',repr(lines[-2:]),flush=True)
-              if lines and len(lines)%2==0:
-                print('PUBLIC_POEM_JSON',json.dumps({'key':name,'url':url,'lines':lines},ensure_ascii=False,separators=(',',':')),flush=True)
-            except Exception as e:print('FETCH_ERROR',name,str(e)[:150],flush=True)
-            time.sleep(.2)
+          for key,url in initial.items():
+           try:
+            r=requests.get(url,timeout=26,headers={'User-Agent':'Mozilla/5.0'});r.encoding='utf-8';s=bs4.BeautifulSoup(r.text,'html.parser')
+            links=[(a.get_text(' ',strip=True)[:75],a.get('href','')) for a in s.select('a[href]') if '/poems/' in a.get('href','') or '/poets/' in a.get('href','')]
+            items=[(t,h) for t,h in links if any(q in t.replace('ـ','') for q in ['لخولة','لِخَوْلَةَ','لِخَوْلَة','أَوْفَى','عَفَت','عفت','لَبيد','لَبِيد'])]
+            first=s.select('section.poem-body tr.poem-verses')
+            first=[[' '.join(w.get_text(' ',strip=True) for w in td.select('span.word-search')) for td in row.select('td.poem-verses__part')] for row in first[:2]]
+            print('LOOKUP',json.dumps({'key':key,'status':r.status_code,'final':r.url,'title':s.title.get_text(' ',strip=True)[:80] if s.title else '', 'matched':items[:20],'first_verses':first,'all_poem_links':len(links)},ensure_ascii=False),flush=True)
+           except Exception as e:print('ERROR',key,str(e)[:180])
+           time.sleep(.2)
           PY
