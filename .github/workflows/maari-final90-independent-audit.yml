@@ -1,0 +1,91 @@
+name: Independent al-Maarri full corpus and safety audit
+on:
+  push:
+    branches:
+      - audit/maari-final90-20261118
+permissions:
+  contents: read
+jobs:
+  audit:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: ddd20d864e533c5fddaba923ecd9ba43eb07655e
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install validation dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Full catalogue completeness regression and Al-Maarri 90 poems
+        run: node --test tests/editorial/poems-completeness-regression.test.mjs tests/editorial/maari-batch01-index.test.mjs
+      - name: Validate library records
+        run: python scripts/validate_library.py
+      - name: Foundation tests
+        run: node scripts/check_site_foundation.mjs
+      - name: All Node tests
+        run: npm test
+      - name: Build public-safe output
+        run: node scripts/build_public_site.mjs
+      - name: Compare all 88 directly linked original pages against nonempty local poetic texts
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync,appendFileSync } from 'node:fs';
+          const poems=JSON.parse(readFileSync('content/poems.json','utf8')).poems
+            .filter(p=>p.batch_id==='maari-batch01-2026-11-18' && p.source_url.startsWith('https://almaarri.com/'));
+          if(poems.length!==88)throw Error('Source distribution drifted: expected 88, got '+poems.length);
+          const normalize=s=>String(s).normalize('NFKC')
+            .replace(/[\u064B-\u065F\u0670\u0640]/g,'').replace(/[أإآ]/g,'ا').replace(/ى/g,'ي')
+            .replace(/[ؤ]/g,'و').replace(/[ئ]/g,'ي')
+            .replace(/[^\p{L}\p{N}]+/gu,' ').trim().replace(/\s+/g,' ');
+          const entity=s=>s.replace(/&#(\d+);/g,(_,n)=>String.fromCodePoint(Number(n)))
+            .replace(/&#x([0-9a-f]+);/gi,(_,n)=>String.fromCodePoint(parseInt(n,16)))
+            .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&quot;/g,'"');
+          let i=0,ok=0,sourceFailures=[],lineDiffs=[];
+          async function worker(){
+            while(true){
+              const idx=i++;if(idx>=poems.length)return;
+              const p=poems[idx];
+              try{
+                await new Promise(r=>setTimeout(r,900));
+                const response=await fetch(p.source_url,{headers:{'User-Agent':'JamharahLiterarySourceAudit/1.0 (public-domain text quality study)'},signal:AbortSignal.timeout(16000)});
+                if(!response.ok)throw Error('HTTP '+response.status);
+                const html=await response.text();
+                const m=html.match(/<div\s+class=["']poem["']\s*>([\s\S]*?)<\/div>/i);
+                if(!m)throw Error('Missing poem div');
+                const halves=[...m[1].matchAll(/<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/gi)]
+                  .map(x=>entity(x[1].replace(/<[^>]*>/g,'').trim()));
+                if(halves.length!==p.verse_count*2)throw Error('Source line count '+halves.length+' expected '+(p.verse_count*2));
+                const old=p.body.split(/\r?\n/).filter(Boolean);
+                if(old.length!==halves.length)throw Error('Local body line count mismatch');
+                let diff=0;
+                for(let h=0;h<old.length;h++)if(normalize(halves[h])!==normalize(old[h]))diff++;
+                if(diff)lineDiffs.push({position:p.batch_original_position,changed_half_lines:diff,total:halves.length});
+                ok++;
+              }catch(e){sourceFailures.push({position:p.batch_original_position,reason:String(e.message||e).slice(0,130)});}
+            }
+          }
+          await Promise.all(Array.from({length:3},()=>worker()));
+          const summary={checked:poems.length,source_matched_halfline_count:ok,
+            source_failures:sourceFailures.length,
+            poet_records_with_different_wording:lineDiffs.length,
+            samples:lineDiffs.slice(0,25),
+            failures:sourceFailures.slice(0,25)};
+          console.log('MAARRI_SOURCE_AUDIT '+JSON.stringify(summary));
+          if(process.env.GITHUB_STEP_SUMMARY)appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '## Al-Maarri linked source audit\n\n' +
+            '- 88 source pages evaluated; 2 records intentionally use alternative witnesses (Wikisource and Islamarchive)\n' +
+            '- Source paragraph/count passing: '+ok+'/88\n' +
+            '- Local vs source textual differences: '+lineDiffs.length+' poems\n' +
+            '- Source failures: '+sourceFailures.length+'\n\n'+
+            'Differences require source-level editorial review, not automatic overwrites.\n');
+          if(sourceFailures.length)process.exitCode=1;
+          NODE
