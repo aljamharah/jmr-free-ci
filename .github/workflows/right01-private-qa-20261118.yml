@@ -18,14 +18,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 80e0b6b12ec3e59558ffe77cdc72e25e4c81ee09
+          ref: 6836b1bc253e2f5ee456e3c9c4f46809a8a137ce
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: source
           persist-credentials: false
       - name: Require exact reviewed immutable private commit
         working-directory: source
         run: |
-          test "$(git rev-parse HEAD)" = "80e0b6b12ec3e59558ffe77cdc72e25e4c81ee09"
+          test "$(git rev-parse HEAD)" = "6836b1bc253e2f5ee456e3c9c4f46809a8a137ce"
           echo "RIGHT01_PRIVATE_SHA_PIN_PASS"
       - uses: actions/setup-node@v4
         with:
