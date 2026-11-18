@@ -1,0 +1,46 @@
+name: Free Arabic poetry diacritization engine probe
+on:
+  push:
+    branches: [maari/intake-20261118]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Mishkal for first candidate
+        run: python -m pip install --disable-pip-version-check mishkal
+      - name: Test python Mishkal diacritization
+        run: |
+          python - <<'PY'
+          from mishkal.tashkeel import TashkeelClass
+          t=TashkeelClass()
+          for s in ['قفا نبك من ذكرى حبيب ومنزل','وحر قلباه ممن قلبه شبم','على قدر أهل العزم تأتي العزائم','إذا المرء لم يدنس من اللؤم عرضه']:
+              try:
+                  print('MISHKAL',s,'=>',t.tashkeel(s),flush=True)
+              except Exception as e:
+                  print('MISHKAL_ERROR',repr(e),flush=True)
+          PY
+      - name: Install Harakat from source
+        run: |
+          git clone --depth 1 https://github.com/jeranaias/harakat.git /tmp/harakat
+          python -m pip install --disable-pip-version-check -r /tmp/harakat/requirements.txt
+      - name: Verify Harakat inference in classical poetry mode
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0,'/tmp/harakat')
+          from harakat import diacritize
+          for s in ['قفا نبك من ذكرى حبيب ومنزل','وحر قلباه ممن قلبه شبم','على قدر أهل العزم تأتي العزائم','إذا المرء لم يدنس من اللؤم عرضه']:
+              try:
+                  print('HARAKAT',s,'=>',diacritize(s,quran_mode=False),flush=True)
+              except TypeError:
+                  print('HARAKAT',s,'=>',diacritize(s),flush=True)
+          PY
