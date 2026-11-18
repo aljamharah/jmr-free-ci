@@ -10,6 +10,15 @@ test('TEST-01 all-poem detail audit tracks dynamic published catalogue, no stale
   assert.doesNotMatch(yml,/assert\.equal\(poems\.length,\s*11\)/);
   assert.match(yml,/for\(const poem of poems\)/);
   assert.match(yml,/for\(const poet of poets\)/);
+  // Keep the gated preview honest: published restricted works show a notice,
+  // no verse lines and no copy/print actions. Prevent a stale-wording false failure.
+  assert.match(yml,/النص الكامل غير مستضاف في الجمهرة بعد/);
+  assert.match(yml,/Restricted poem rights notice missing/);
+  assert.match(yml,/Restricted poem verses unexpectedly rendered/);
+  assert.match(yml,/Restricted poem copy\/print controls must stay hidden/);
+  assert.match(yml,/\.poem-line'\)\.count\(\)/);
+  assert.match(yml,/#actions'\)\.isHidden\(\)/);
+  assert.doesNotMatch(yml,/لم يُنشر النص الكامل/);
   assert.match(yml,/request\(\)\.method\(\)|r\.method\(\)==='GET'/);
   assert.doesNotMatch(yml,/^\s*pull_request_target:/m);
   assert.match(yml,/permissions:\s*\n\s+contents: read/);
