@@ -114,11 +114,21 @@ try {
             'Copy must preserve original published poem text');
           await page.locator('#poemActionFeedback.show').waitFor({state:'visible',timeout:8000});
           report.poem_actions++;
-          const expectedShare=BASE+'/poem.html?slug='+encodeURIComponent(poem.slug);
           await page.locator('#sharePoem').click();
-          await page.waitForFunction(expected=>window.__test01?.copied===expected,expectedShare,{timeout:8000});
+          // Cloudflare Pages may canonicalize /poem.html to /poem. Verify content
+          // identity and query hygiene, not a hard-coded .html pathname.
+          await page.waitForFunction(previous=>window.__test01?.copied!==previous,
+            poem.body,{timeout:8000});
           const sharedUrl=await page.evaluate(()=>window.__test01.copied);
-          assert.equal(sharedUrl,expectedShare,'Canonical share must strip private from and tracking parameters');
+          const canonical=new URL(sharedUrl);
+          assert.equal(canonical.origin,BASE,'Share must stay on public Jamharah origin');
+          assert.ok(['/poem','/poem.html'].includes(canonical.pathname),
+            'Share path must point to the public poem page');
+          assert.deepEqual([...canonical.searchParams.keys()],['slug'],
+            'Share must omit private navigation, tracking and unrelated parameters');
+          assert.equal(canonical.searchParams.get('slug'),poem.slug,
+            'Shared slug must identify the current poem');
+          assert.equal(canonical.hash,'','Share must not include a private fragment');
           report.share_actions++;
           await page.locator('#print').click();
           assert.equal(await page.evaluate(()=>window.__test01.printCalls),1,
