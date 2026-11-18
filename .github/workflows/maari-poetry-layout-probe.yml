@@ -22,6 +22,18 @@ jobs:
                   d=dict(attrs)
                   if tag=="meta" and d.get("property") in ["og:description","og:title"]:
                       self.meta[d["property"]]=d.get("content","")
+          import urllib.robotparser
+          for domain in ["https://almaarri.com","https://www.aldiwan.net","https://ar.wikisource.org","https://poetsgate.com"]:
+              try:
+                  robot=urllib.robotparser.RobotFileParser()
+                  robot.set_url(domain+"/robots.txt")
+                  robot.read()
+                  print("ROBOTS",domain,"may_fetch",robot.can_fetch("JamharahLiteraryProject/1.0",domain+"/poem/example/"),"allow_all",robot.allow_all,"disallow_all",robot.disallow_all)
+                  req=urllib.request.Request(domain+"/robots.txt",headers={"User-Agent":"Mozilla/5.0"})
+                  try:
+                      with urllib.request.urlopen(req,timeout=12) as resp: print("ROBOTS_HTTP",domain,resp.status,repr(resp.read(1200).decode("utf-8","replace")))
+                  except Exception as e: print("ROBOTS_RESPONSE_ERROR",domain,str(e)[:180])
+              except Exception as e: print("ROBOTS_ERROR",domain,str(e)[:180])
           titles=["أرى العنقاء تكبر أن تصادا","نضحي ونمسي كبني آدم","تفقهت في الدنيا فلم تلف طائلا","غير مجد في ملتي واعتقادي"]
           for title in titles:
               url="https://almaarri.com/poem/"+quote(title.replace(" ","-"))+"/"
