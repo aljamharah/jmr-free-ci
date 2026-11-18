@@ -1,0 +1,35 @@
+name: Verify second source cross-matched classical red harakat
+on:
+  push:
+    branches: [audit/poetry-secondary-20261118]
+permissions: {contents: read}
+jobs:
+  validate:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: c6a2b4e816239e048ba486f2484d0a7d0f818e66
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Free library dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Pin source revision
+        run: test "$(git rev-parse HEAD)" = 'c6a2b4e816239e048ba486f2484d0a7d0f818e66'
+      - name: Test collated sources, verse count, absence of source conflict and red display
+        run: node --test tests/editorial/classics-secondary-sources.test.mjs tests/editorial/classics-source-vocalization.test.mjs tests/editorial/poetry-source-collation-harakat.test.mjs tests/editorial/poems-completeness-regression.test.mjs tests/poem-red-diacritics-runtime.test.mjs
+      - name: All site regressions and sanitized public build
+        run: |
+          python scripts/validate_library.py
+          node scripts/check_site_foundation.mjs
+          npm test
+          node scripts/build_public_site.mjs
+      - name: No mutations during read-only validation
+        run: git diff --exit-code -- content/poems.json poem.html tests/
