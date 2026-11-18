@@ -1,4 +1,4 @@
-name: Five classics extra 1861 harakat pinned independent CI
+name: Five classics reconciled 1563 harakat pinned independent CI
 on:
   push:
     branches: [audit/poetry-secondary-verified-20261118]
@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: b9fdf7133de28fca9d83c89b7b821f2fa051a712
+          ref: 7f84d352806ab1802a6f26b59d59ca7e30cde2c6
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Validate pinned source
-        run: test "$(git rev-parse HEAD)" = "b9fdf7133de28fca9d83c89b7b821f2fa051a712"
+        run: test "$(git rev-parse HEAD)" = "7f84d352806ab1802a6f26b59d59ca7e30cde2c6"
       - name: Install validation tools
         run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
       - name: Verify additional source-confirmed harakat and all previous poem agreements
