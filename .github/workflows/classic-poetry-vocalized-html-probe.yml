@@ -1,0 +1,47 @@
+name: Vocalized poetry available sources HTML probe
+on:
+  push:
+    branches: [audit/diacritics-source-probe-20261118]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Probe 5 independently published vocalized poem pages
+        run: |
+          python -m pip -q install requests beautifulsoup4
+          python - <<'PY'
+          import requests,bs4,re,time
+          sources=[
+           ("DCT_M1","https://poetry.dct.gov.ae/poems/283-واحر-قلباه-ممن-قلبه-شبم"),
+           ("DCT_M2","https://poetry.dct.gov.ae/poems/286-على-قدر-أهل-العزم-تأتي-العزائم"),
+           ("QAWAFI_M","https://www.qawafi.org/poems/ala-qadri-ahl-al-azm"),
+           ("QAWAFI_ANT","https://www.qawafi.org/poems/hal-ghadara"),
+           ("QAFIYAH_ANT","https://qafiyah.com/poems/iaqM"),
+           ("DIWAN_SY","https://www.diwan.sy/poem/wahr-qlbah-mmn-qlbh-shbm")
+          ]
+          for name,url in sources:
+            try:
+              r=requests.get(url,timeout=18,headers={"User-Agent":"Mozilla/5.0"},allow_redirects=True)
+              soup=bs4.BeautifulSoup(r.content,"html.parser")
+              text=soup.get_text(" ",strip=True)
+              candidates=[]
+              for tag in soup.find_all(['div','p','section','article','span','li']):
+                cls=' '.join(tag.get('class',[]))+' '+str(tag.get('id',''))
+                if re.search('poem|verse|bayt|bayt|shatr|line|misra|hemist|couplet|poetry|arabic',cls,re.I):
+                  txt=tag.get_text(" ",strip=True)
+                  if len(txt)>10:candidates.append((tag.name,cls[:95],len(txt),txt[:85]))
+              counts={}
+              for tag,cl,n,t in candidates:counts[(tag,cl)]=counts.get((tag,cl),0)+1
+              print('RESULT',name,'status',r.status_code,'bytes',len(r.content),'url',r.url,'title',str(soup.title.get_text(" ",strip=True) if soup.title else "")[:75],flush=True)
+              print('CLASSES',name,repr(sorted(counts.items(),key=lambda x:-x[1])[:16])[:1800],flush=True)
+              print('SAMPLE',name,repr(candidates[:10])[:1700],flush=True)
+            except Exception as e:print('ERROR',name,type(e).__name__,str(e)[:200],flush=True)
+            time.sleep(.35)
+          PY
