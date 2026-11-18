@@ -1,0 +1,44 @@
+name: Validate al-Maarri PR219 private corpus using free CI
+on:
+  push:
+    branches:
+      - maari/intake-20261118
+    paths:
+      - .github/workflows/maari-pr219-validate.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 9840a1190ac03fd365da1577e518e157f47ae714
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install source validators
+        run: python -m pip install --disable-pip-version-check --quiet python-frontmatter pyyaml
+      - name: Verify exact PR219 canonical source commit
+        run: test "$(git rev-parse HEAD)" = 9840a1190ac03fd365da1577e518e157f47ae714
+      - name: Run strict al-Maarri editorial integrity test
+        run: node --test tests/editorial/maari-batch01-index.test.mjs
+      - name: Validate library records and safe rights handling
+        run: python scripts/validate_library.py
+      - name: All source and JMR technical foundation checks
+        run: node scripts/check_site_foundation.mjs
+      - name: Full Node test suite
+        run: npm test
+      - name: Build safe static production output
+        run: node scripts/build_public_site.mjs
+      - name: Ensure private repository never modified
+        run: git diff --exit-code -- content/poems.json tests/editorial/maari-batch01-index.test.mjs
