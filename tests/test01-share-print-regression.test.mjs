@@ -18,9 +18,11 @@ test('TEST-01 canonical share and print are verified with in-browser mocks',()=>
   assert.match(source,/Object\.defineProperty\(navigator,'clipboard'/);
   assert.match(source,/Object\.defineProperty\(navigator,'share'/);
   assert.match(source,/window\.print=\(\)=>\{window\.__test01\.printCalls\+\+;/);
-  assert.match(source,/expectedShare=BASE\+'\/poem\.html\?slug='/);
+  assert.ok(source.includes("['/poem','/poem.html'].includes(canonical.pathname)"));
+  assert.ok(source.includes('canonical.searchParams.keys()'));
   assert.match(source,/utm_source=verification/);
-  assert.match(source,/assert\.equal\(sharedUrl,expectedShare/);
+  assert.ok(source.includes("canonical.searchParams.get('slug'),poem.slug"));
+  assert.ok(source.includes('assert.equal(canonical.origin,BASE'));
   assert.match(source,/report\.print_actions\+\+/);
   assert.match(source,/report\.share_actions\+\+/);
 });
