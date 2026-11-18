@@ -1,4 +1,4 @@
-name: Inspect structured public poetry verses
+name: Identify public poetry couplet wrappers
 on:
   push:
     branches: [audit/poetry-voweled-sources-20261118]
@@ -6,31 +6,27 @@ permissions: {contents: read}
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - name: Inspect two source HTML elements exactly
+      - name: Find correct DCT half-line selectors
         run: |
           python -m pip -q install requests beautifulsoup4
           python - <<'PY'
-          import requests,bs4,re,json
-          cases=[('blfosha','https://www.blfosha.net/poem/3000001','div.bf-poem'),
-                 ('dct','https://poetry.dct.gov.ae/poems/286-على-قدر-أهل-العزم-تأتي-العزائم','section.poem-body')]
-          for key,url,sel in cases:
-              try:
-                  r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0'});r.encoding='utf-8';s=bs4.BeautifulSoup(r.text,'html.parser')
-                  container=s.select_one(sel)
-                  if not container: print('NO_CONTAINER',key);continue
-                  if key=='blfosha':
-                      elems=container.select('div.bf-bayt')[:3]
-                  else:
-                      elems=container.find_all(['div','span','p'],recursive=True)[:45]
-                  for i,e in enumerate(elems):
-                      if i>35:break
-                      html=str(e)[:950]
-                      print('ELEMENT',key,i,json.dumps({'tag':e.name,'class':e.get('class'),'html':html,'text':e.get_text(' ',strip=True)[:130]},ensure_ascii=False),flush=True)
-                  print('CHILD_TAGS',key,[(x.name,x.get('class')) for x in container.find_all(recursive=False)[:20]],flush=True)
-              except Exception as e:print('FAIL',key,repr(e)[:250])
+          import requests,bs4,collections,json
+          url='https://poetry.dct.gov.ae/poems/286-على-قدر-أهل-العزم-تأتي-العزائم'
+          r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0'});r.encoding='utf-8';s=bs4.BeautifulSoup(r.text,'html.parser')
+          word=s.select_one('section.poem-body .word-search')
+          if word:
+            p=word
+            for n in range(8):
+              if not p:break
+              print('PARENT',n,json.dumps({'tag':p.name,'class':p.get('class'),'id':p.get('id'),'text':p.get_text(' ',strip=True)[:220],'html':str(p)[:1100]},ensure_ascii=False),flush=True)
+              p=p.parent
+          classes=collections.Counter()
+          for t in s.select_one('section.poem-body').find_all(True):
+            for cls in t.get('class') or []: classes[cls]+=1
+          print('CLASSES',classes.most_common(55))
           PY
