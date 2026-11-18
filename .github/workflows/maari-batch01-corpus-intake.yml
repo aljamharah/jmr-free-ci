@@ -1,0 +1,57 @@
+name: Al-Maarri batch 01 read-only corpus intake
+on:
+  push:
+    branches:
+      - maari/intake-20261118
+    paths:
+      - scripts/maari_batch01_fetch.py
+      - .github/workflows/maari-batch01-corpus-intake.yml
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  intake:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/maari/intake-20261118'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: maari/intake-20261118
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: main
+          path: private-source
+          persist-credentials: false
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+      - name: Read-only private source HEAD for traceability
+        run: git -C private-source rev-parse HEAD
+      - name: Install minimal HTML reader
+        run: python -m pip install --disable-pip-version-check --quiet requests beautifulsoup4
+      - name: Extract and verify only complete classical verse bodies
+        run: python scripts/maari_batch01_fetch.py
+      - name: Validate generated JSON and counts
+        run: |
+          python - <<'PY'
+          import json
+          a=json.load(open("data/maari-intake-20261118-results.json",encoding="utf8"))
+          assert a["summary"]["poems_in_batch"]==90
+          assert len(a["records"])==a["summary"]["eligible"]
+          assert len({p["slug"] for p in a["records"]})==len(a["records"])
+          assert all(len(p["body"].splitlines())==p["verse_count"]*2 for p in a["records"])
+          print("INTAKE_VALIDATED",a["summary"])
+          PY
+      - name: Save review-only dataset to disposable public intake branch (never publish to main/private production)
+        run: |
+          git config user.name 'Jamharah Free CI'
+          git config user.email 'free-ci@users.noreply.github.com'
+          git add data/maari-intake-20261118-results.json
+          if git diff --cached --quiet; then
+            echo 'No candidate data changed'
+          else
+            git commit -m 'data: review-only public-domain Maarri candidates'
+            git push origin HEAD:maari/intake-20261118
+          fi
+      - name: Confirm private source remained read-only
+        run: git -C private-source diff --exit-code
