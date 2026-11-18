@@ -1,0 +1,41 @@
+name: Classical poetry red-harakat source review and full site checks
+on:
+  push:
+    branches: [audit/poetry-red-classics-20261118]
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'aljamharah/jmr-free-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 53980edd3bea5d1f96029c1f088d40c44492a660
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare free test requirements
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml
+      - name: Confirm immutable source SHA
+        run: test "$(git rev-parse HEAD)" = '53980edd3bea5d1f96029c1f088d40c44492a660'
+      - name: Poetry-specific text completeness and vowel proof
+        run: |
+          node --test tests/editorial/classics-source-vocalization.test.mjs tests/editorial/poems-completeness-regression.test.mjs tests/editorial/poetry-fixed-particles-harakat.test.mjs tests/editorial/maari-batch01-index.test.mjs
+          node --test tests/poem-red-diacritics-runtime.test.mjs tests/poem-red-diacritics-no-heading.test.mjs
+      - name: Library and site security, full regressions
+        run: |
+          python scripts/validate_library.py
+          node scripts/check_site_foundation.mjs
+          npm test
+      - name: Verify production-ready sanitized site
+        run: node scripts/build_public_site.mjs
+      - name: Confirm tests did not modify canonical source
+        run: git diff --exit-code -- content/poems.json poem.html tests/
