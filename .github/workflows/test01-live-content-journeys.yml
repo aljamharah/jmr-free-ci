@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/test01-live-content-journeys.yml"
+      - "scripts/test01-live-content-journeys.mjs"
   workflow_dispatch:
 permissions:
   contents: read
