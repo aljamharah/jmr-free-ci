@@ -33,6 +33,8 @@ jobs:
                   desc=p.meta.get("og:description","")
                   lines=[x.strip() for x in desc.splitlines() if x.strip()]
                   print("TITLE",title,"META_TITLE",p.meta.get("og:title"),"CHARS",len(desc),"LINES",len(lines),"FIRST",repr(lines[:2]),"LAST",repr(lines[-2:]))
+                  pos=body.rfind(lines[0]) if lines else -1
+                  print("DOM_FRAGMENT",title,repr(body[max(0,pos-270):pos+750]).replace("\\n","\\n")[:1600])
               except Exception as e:
                   print("ERROR",title,type(e).__name__,str(e)[:250])
               time.sleep(0.5)
