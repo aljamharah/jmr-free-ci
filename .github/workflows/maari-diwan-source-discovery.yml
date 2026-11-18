@@ -1,4 +1,4 @@
-name: Discover published Ma'arri original diwan page structure
+name: Discover fully vowelled al-Maarri Sakt al-Zand poem links
 on:
   push:
     branches: [audit/maari-poetry-source-discovery-20261118]
@@ -6,33 +6,26 @@ permissions: {contents: read}
 jobs:
   discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - name: Inspect DCT classical author and diwan navigation, source-only
+      - name: Inspect index of historical 82 Sakt al-Zand poems
         run: |
           python -m pip -q install requests beautifulsoup4
           python - <<'PY'
-          import json,requests,bs4,re,time
-          urls=[
-            'https://poetry.dct.gov.ae/poets/412-أبو-العلاء-المعري',
-            'https://poetry.dct.gov.ae/poets/412-أبو-العلاء-المعري/diwans',
-            'https://poetry.dct.gov.ae/poets/412-أبو-العلاء-المعري/poems',
-          ]
-          for url in urls:
+          import requests,bs4,json,time
+          for key,url in [
+            ('saqt','https://poetry.dct.gov.ae/diwan/14734-سقط-الزند'),
+            ('luzum','https://poetry.dct.gov.ae/diwan/11163-لزوم-ما-لا-يلزم')]:
             try:
-              r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0'});r.encoding='utf-8'
-              soup=bs4.BeautifulSoup(r.text,'html.parser')
-              matches=[]
-              for a in soup.select('a[href]'):
-                title=a.get_text(' ',strip=True)
-                href=a.get('href','')
-                if re.search(r'سقط الزند|لزوم|الدرعيات|أرى العنقاء|ألا في سبيل المجد|يا للمفضل|معان من|القصائد|الدواوين',title):
-                  matches.append({'label':title[:100],'href':href[:220]})
-              poems=[{'text':a.get_text(' ',strip=True)[:65],'href':a.get('href','')[:130]} for a in soup.select('a[href*="/poems/"]')[:15]]
-              print('NAV',json.dumps({'status':r.status_code,'url':r.url,'size':len(r.content),'title':soup.title.get_text(' ',strip=True) if soup.title else '','matches':matches[:40],'poem_links':poems,'total_poem_links':len(soup.select('a[href*="/poems/"]'))},ensure_ascii=False),flush=True)
-            except Exception as e: print('ERROR',url,str(e)[:180],flush=True)
-            time.sleep(.4)
+              r=requests.get(url,timeout=26,headers={'User-Agent':'Mozilla/5.0'});r.encoding='utf-8';s=bs4.BeautifulSoup(r.text,'html.parser')
+              links=[]
+              for a in s.select('a[href*="/poems/"]'):
+                title=a.get_text(' ',strip=True);href=a.get('href','')
+                if title and href not in [x.get('href') for x in links]:links.append({'title':title[:135],'href':href})
+              print('DIWAN',json.dumps({'key':key,'status':r.status_code,'url':r.url,'size':len(r.content),'poems':links[:130],'count':len(links)},ensure_ascii=False),flush=True)
+            except Exception as e:print('ERROR',key,str(e)[:150],flush=True)
+            time.sleep(.3)
           PY
