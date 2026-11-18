@@ -87,8 +87,14 @@ jobs:
                    (await page.locator('#poemVerses').innerText()).trim().length>0,
                   'Approved published poem text did not render');
               }else{
-                ok((await page.locator('#poemText').innerText()).includes('لم يُنشر النص الكامل'),
-                  'Restricted poem text must remain hidden');
+                // Rights-restricted/absent text must never render verse elements.
+                // The current UI says "النص الكامل غير مستضاف ..." (legacy UI used another phrase).
+                ok((await page.locator('#poemVerses .verse-line').count())===0,
+                  'Restricted poem unexpectedly rendered verse elements');
+                const placeholder=await page.locator('#poemText').innerText();
+                ok(placeholder.includes('النص الكامل غير مستضاف في الجمهرة بعد.')||
+                   placeholder.includes('لم يُنشر النص الكامل'),
+                  'Restricted poem must have an explicit unavailable-state message');
               }
               ok(pMap.has(poem.poet_slug),'Orphan poet in public index');
             }
