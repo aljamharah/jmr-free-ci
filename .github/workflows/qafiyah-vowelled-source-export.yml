@@ -1,0 +1,48 @@
+name: Original public poetry vowelled-source alignment pool
+on:
+  push:
+    branches: [audit/diacritics-source-probe-20261118]
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: |
+          python -m pip -q install requests beautifulsoup4
+          python - <<'PY'
+          import requests,bs4,time,json,re
+          sources={
+             "qifa_rHUD":"https://qafiyah.com/poems/rHUD",
+             "qifa_pxyk":"https://qafiyah.com/poems/pxyk",
+             "tarafa_xjIC":"https://qafiyah.com/poems/xjIC",
+             "tarafa_YluS":"https://qafiyah.com/poems/YluS",
+             "antar_iaqM":"https://qafiyah.com/poems/iaqM",
+             "zuhair_gnNg":"https://qafiyah.com/poems/gnNg",
+             "zuhair_wOvI":"https://qafiyah.com/poems/wOvI",
+             "labid_fkam":"https://qafiyah.com/poems/fkam",
+             "mutanabbi_vaJb":"https://qafiyah.com/poems/vaJb"
+          }
+          for ident,url in sources.items():
+            try:
+              r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0 (literary archival matching; low-frequency)'})
+              r.raise_for_status()
+              soup=bs4.BeautifulSoup(r.content,'html.parser')
+              container=soup.select_one('div.flex.flex-col.text-verse')
+              if not container:
+                print('SOURCEERROR:'+ident+':missing-verse-container',flush=True)
+                continue
+              verses=[]
+              for group in container.find_all('div',recursive=False):
+                halves=[p.get_text(' ',strip=True) for p in group.find_all('p',recursive=False)]
+                if len(halves)==2:
+                  verses.extend(halves)
+              if len(verses)<10: print('SOURCEERROR:'+ident+':too-few-lines:'+str(len(verses)),flush=True);continue
+              print('SOURCECOUNT:'+ident+':'+str(len(verses)),flush=True)
+              print('SOURCEDATA:'+ident+':'+json.dumps(verses,ensure_ascii=False,separators=(',',':')),flush=True)
+            except Exception as e:print('SOURCEERROR:'+ident+':'+type(e).__name__+':'+str(e)[:120],flush=True)
+            time.sleep(.4)
+          PY
