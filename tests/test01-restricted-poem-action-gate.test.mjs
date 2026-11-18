@@ -19,7 +19,7 @@ test('TEST-01 restricted poems never expose verse lines or copy/print actions',(
 });
 
 test('TEST-01 live browser probe syntax remains valid and changes trigger its workflow',()=>{
-  const r=spawnSync(process.execPath,['--check'],{input:src,encoding:'utf8'});
+  const r=spawnSync(process.execPath,['--input-type=module','--check'],{input:src,encoding:'utf8'});
   assert.equal(r.status,0,r.stderr);
   assert.match(wf,/scripts\/test01-live-content-journeys\.mjs/);
   assert.match(wf,/permissions:\s*\n\s+contents: read/);
