@@ -1,4 +1,4 @@
-name: Inspect fully vocalized classical public poetry sources
+name: Inspect structured public poetry verses
 on:
   push:
     branches: [audit/poetry-voweled-sources-20261118]
@@ -6,38 +6,31 @@ permissions: {contents: read}
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - name: Probe source availability and find poem content structure
+      - name: Inspect two source HTML elements exactly
         run: |
           python -m pip -q install requests beautifulsoup4
           python - <<'PY'
-          import requests,bs4,re,json,time
-          urls={
-          'imru':'https://www.blfosha.net/poem/3000001',
-          'mutanabbi1':'https://www.blfosha.net/poem/10521',
-          'mutanabbi2':'https://www.blfosha.net/poem/10524',
-          'mutanabbiMat1':'https://matnabi.com/poems/wahr-qlbah-mmn-qlbh-shbm',
-          'mutanabbiMat2':'https://matnabi.com/poems/aly-qdr-ahl-alazm-taty-alazaym',
-          'mutanabbiDct':'https://poetry.dct.gov.ae/poems/286-على-قدر-أهل-العزم-تأتي-العزائم',
-          'mutanabbiDeewan':'https://deewan.app/ar/poems/المتنبي/على%20قدر%20أهل%20العزم%20تأتي%20العزائم?corpus=classical',
-          'antarDct':'https://poetry.dct.gov.ae/poems/9850-هل-غادر-الشعراء-من-متردم'
-          }
-          for key,url in urls.items():
-            try:
-              r=requests.get(url,timeout=18,headers={'User-Agent':'Mozilla/5.0'},allow_redirects=True);s=bs4.BeautifulSoup(r.text,'html.parser')
-              blocks=[]
-              for el in s.find_all(['div','section','article','ol','ul']):
-                attr=' '.join(el.get('class') or [])+' '+(el.get('id') or '')
-                if re.search(r'poem|verse|bayt|bait|sh3er|abyat|content|text|hemistich|qasida',attr,re.I):
-                  text=el.get_text(' ',strip=True)
-                  if 50<len(text)<10000:
-                    blocks.append({'tag':el.name,'class':attr[:120],'size':len(text),'first':text[:140],'p':len(el.find_all('p')),'li':len(el.find_all('li'))})
-              blocks=sorted(blocks,key=lambda x:-x['size'])[:9]
-              print('PROBE',json.dumps({'key':key,'status':r.status_code,'bytes':len(r.content),'final':r.url,'title':s.title.get_text(' ',strip=True)[:100] if s.title else '','blocks':blocks},ensure_ascii=False),flush=True)
-            except Exception as e:print('ERROR',key,repr(e)[:180],flush=True)
-            time.sleep(.25)
+          import requests,bs4,re,json
+          cases=[('blfosha','https://www.blfosha.net/poem/3000001','div.bf-poem'),
+                 ('dct','https://poetry.dct.gov.ae/poems/286-على-قدر-أهل-العزم-تأتي-العزائم','section.poem-body')]
+          for key,url,sel in cases:
+              try:
+                  r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0'});r.encoding='utf-8';s=bs4.BeautifulSoup(r.text,'html.parser')
+                  container=s.select_one(sel)
+                  if not container: print('NO_CONTAINER',key);continue
+                  if key=='blfosha':
+                      elems=container.select('div.bf-bayt')[:3]
+                  else:
+                      elems=container.find_all(['div','span','p'],recursive=True)[:45]
+                  for i,e in enumerate(elems):
+                      if i>35:break
+                      html=str(e)[:950]
+                      print('ELEMENT',key,i,json.dumps({'tag':e.name,'class':e.get('class'),'html':html,'text':e.get_text(' ',strip=True)[:130]},ensure_ascii=False),flush=True)
+                  print('CHILD_TAGS',key,[(x.name,x.get('class')) for x in container.find_all(recursive=False)[:20]],flush=True)
+              except Exception as e:print('FAIL',key,repr(e)[:250])
           PY
