@@ -7,7 +7,7 @@ const script=readFileSync(new URL('../scripts/test01-live-content-journeys.mjs',
 const workflow=readFileSync(new URL('../.github/workflows/test01-live-content-journeys.yml',import.meta.url),'utf8');
 
 test('TEST-01 browser journey script is valid Node.js',()=>{
-  const p=spawnSync(process.execPath,['--check'],{input:script,encoding:'utf8'});
+  const p=spawnSync(process.execPath,['--input-type=module','--check'],{input:script,encoding:'utf8'});
   assert.equal(p.status,0,p.stderr);
 });
 test('TEST-01 live browser touches public GET-only and cannot invoke paid JMR AI',()=>{
