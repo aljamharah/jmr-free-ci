@@ -1,31 +1,72 @@
-name: Discover fully vowelled al-Maarri Sakt al-Zand poem links
+name: Collate first al-Maarri intake titles from public Sakt al-Zand editions
 on:
   push:
     branches: [audit/maari-poetry-source-discovery-20261118]
 permissions: {contents: read}
 jobs:
-  discover:
+  collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - name: Inspect index of historical 82 Sakt al-Zand poems
+      - name: Extract public-source fully-vowelled Ma'arri text by first words
         run: |
           python -m pip -q install requests beautifulsoup4
           python - <<'PY'
-          import requests,bs4,json,time
-          for key,url in [
-            ('saqt','https://poetry.dct.gov.ae/diwan/14734-سقط-الزند'),
-            ('luzum','https://poetry.dct.gov.ae/diwan/11163-لزوم-ما-لا-يلزم')]:
+          import re,unicodedata,json,requests,bs4,time,concurrent.futures
+          sources=list(range(16575,16629))+list(range(16645,16675))
+          prefixes="""أرى العنقاء
+          ألا في سبيل المجد
+          يا للمفضل
+          عظيم لعمري
+          تخيرت جهدي
+          لقد آن أن
+          يرومك والجوزاء
+          عللاني فإن
+          إليك تناهى
+          أدنى الفوارس
+          أفوق البدر
+          ألاح وقد
+          إبق في نعمة
+          معان من أحبتنا
+          يا ساهر البرق
+          أعن وخد
+          خلو فؤادي
+          سمعت نعيها
+          أودى فليت
+          يا راعي الود
+          أحسن بالواجد
+          بني الحسب
+          نقمت الرضى
+          غير مجد""".splitlines()
+          def norm(s):
+            s=unicodedata.normalize('NFKC',s)
+            s=re.sub(r'[\u0610-\u061A\u064B-\u065F\u0670\u0640]','',s)
+            for a,b in [('أ','ا'),('إ','ا'),('آ','ا'),('ى','ي')]:s=s.replace(a,b)
+            return ' '.join(re.sub(r'[^\u0621-\u064a]+',' ',s).split())
+          wanted=[norm(s.strip()) for s in prefixes]
+          session=requests.Session();session.headers.update({'User-Agent':'Mozilla/5.0 (public-domain classical poetry reference check)'})
+          def fetch(num):
             try:
-              r=requests.get(url,timeout=26,headers={'User-Agent':'Mozilla/5.0'});r.encoding='utf-8';s=bs4.BeautifulSoup(r.text,'html.parser')
-              links=[]
-              for a in s.select('a[href*="/poems/"]'):
-                title=a.get_text(' ',strip=True);href=a.get('href','')
-                if title and href not in [x.get('href') for x in links]:links.append({'title':title[:135],'href':href})
-              print('DIWAN',json.dumps({'key':key,'status':r.status_code,'url':r.url,'size':len(r.content),'poems':links[:130],'count':len(links)},ensure_ascii=False),flush=True)
-            except Exception as e:print('ERROR',key,str(e)[:150],flush=True)
-            time.sleep(.3)
+              r=session.get('https://poetry.dct.gov.ae/poems/'+str(num)+'-',timeout=24)
+              if r.status_code!=200:return None
+              r.encoding='utf-8';soup=bs4.BeautifulSoup(r.text,'html.parser')
+              title=soup.title.get_text(' ',strip=True) if soup.title else ''
+              first=norm(title.split(' - ')[0])
+              if not any(first.startswith(s) or s.startswith(first) for s in wanted):return None
+              cells=[]
+              for row in soup.select('section.poem-body tr.poem-verses'):
+                parts=row.select('td.poem-verses__part')
+                if len(parts)!=2:continue
+                cells.extend([' '.join(w.get_text(' ',strip=True) for w in part.select('span.word-search')) for part in parts])
+              if len(cells)<2 or len(cells)%2:return None
+              return {'id':num,'title':title[:160],'url':r.url,'lines':cells}
+            except Exception:return None
+          with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            for item in executor.map(fetch,sources):
+              if item:
+                print('PUBLIC_POEM_JSON',json.dumps(item,ensure_ascii=False,separators=(',',':')),flush=True)
+                print('FOUND',item['id'],item['title'],'VERSES',len(item['lines'])//2,flush=True)
           PY
