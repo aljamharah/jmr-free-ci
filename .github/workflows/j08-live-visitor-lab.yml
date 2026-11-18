@@ -1,4 +1,6 @@
 name: J08 live production visitor journeys, accessibility and lab speed
+# TEST-01 2026-11-18: rerun existing read-only production browser and accessibility suite.
+# Results apply to the Production release active during the run; verify its SHA separately.
 on:
   push:
     branches: [main]
