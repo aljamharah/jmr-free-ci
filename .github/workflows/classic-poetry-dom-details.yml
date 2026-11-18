@@ -1,0 +1,33 @@
+name: Exact half-verse markup structural probe
+on:
+  push:
+    branches: [audit/diacritics-source-probe-20261118]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: |
+          python -m pip -q install requests beautifulsoup4
+          python - <<'PY'
+          import requests,bs4
+          targets=[
+             ('DCT','https://poetry.dct.gov.ae/poems/286-على-قدر-أهل-العزم-تأتي-العزائم','section.poem-body'),
+             ('QAF','https://qafiyah.com/poems/rHUD','div.flex.flex-col.text-verse'),
+             ('QAFZ','https://qafiyah.com/poems/gnNg','div.flex.flex-col.text-verse')
+          ]
+          for name,url,sel in targets:
+            try:
+              s=bs4.BeautifulSoup(requests.get(url,timeout=18).content,'html.parser')
+              container=s.select_one(sel)
+              print('SECTION',name,'found',bool(container),flush=True)
+              if container:
+                print('HTML',name,str(container)[:3500],flush=True)
+                print('TOP_LEVEL',name,[(t.name, t.get('class'),t.get_text(' ',strip=True)[:120]) for t in container.find_all(recursive=False)[:6]],flush=True)
+            except Exception as e:print('ERR',name,repr(e),flush=True)
+          PY
