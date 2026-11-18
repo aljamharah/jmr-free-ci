@@ -34,9 +34,13 @@ jobs:
             return r.json();
           }
           const poets=(await publicJson('/content/poets.json')).poets;
-          const poems=(await publicJson('/content/poems.json')).poems;
-          assert.equal(poets.length,13);
-          assert.equal(poems.length,11);
+          const poems=(await publicJson('/content/poems.json')).poems
+            .filter(p=>p.publication_status==='published');
+          // Content grows frequently; test every current public record, not 2026-11-13 counts.
+          assert.ok(poets.length>=1&&poets.length<=100,'Unexpected public poet count');
+          assert.ok(poems.length>=1&&poems.length<=2500,'Unexpected public poem count');
+          assert.equal(new Set(poets.map(p=>p.slug)).size,poets.length,'Duplicate poet slugs');
+          assert.equal(new Set(poems.map(p=>p.slug)).size,poems.length,'Duplicate poem slugs');
           let browser,checks=0;
           const ok=(v,msg)=>{assert.ok(v,msg);checks++;};
           try{
