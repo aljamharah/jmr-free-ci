@@ -66,8 +66,34 @@ jobs:
             echo "RIGHT01_FULL_PRIVATE_FOUNDATION_PASS"
           else
             echo "::error::Private foundation failed; withheld private test output."
+            # Publish ONLY a known suite label, never source excerpts or stack traces.
+            node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const data=readFileSync(process.env.RUNNER_TEMP+'/right01-foundation.log','utf8');
+          const labels=[
+            'Internal page/asset references','Sanitized deploy-only dist and draft privacy',
+            'Unified header and functional search navigation','Lexicon integrity',
+            'Lexicon fast search','Quran corpus integrity','JMR API behavior and input guards',
+            'JMR failure paths, free-tier quota and rate limits',
+            'JMR runtime regression tests','Node unit tests'
+          ];
+          for(const label of labels)if(data.includes('FAILED: '+label+' ('))
+            console.log('RIGHT01_FAILED_SUITE_CATEGORY='+label);
+          NODE
             exit 1
           fi
+      - name: Diagnose book-specific tests without exposing details
+        if: failure()
+        working-directory: source
+        shell: bash
+        run: |
+          for file in tests/book-printed-edition-access.test.mjs tests/book-reader-first-pdf-collapse.test.mjs tests/j06-library-book-reader-navigation.test.mjs tests/book-metadata-more-bottom.test.mjs tests/book-metadata-expand-two-rows.test.mjs tests/j08-library-touch-targets.test.mjs tests/ui-library-jmr-regression.test.js; do
+            if node --test "$file" > "$RUNNER_TEMP/right01-individual-check.log" 2>&1; then
+              echo "RIGHT01_COMPONENT_PASS=$file"
+            else
+              echo "RIGHT01_COMPONENT_FAIL=$file"
+            fi
+          done
       - name: Confirm source remained unchanged and report aggregate-only evidence
         working-directory: source
         run: |
