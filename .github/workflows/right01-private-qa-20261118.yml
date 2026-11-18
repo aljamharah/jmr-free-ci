@@ -1,0 +1,83 @@
+name: RIGHT-01 exact private books rights validation (read-only)
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/right01-private-qa-20261118.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: right01-private-qa-once
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out pinned private rights-remediation source without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 80e0b6b12ec3e59558ffe77cdc72e25e4c81ee09
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - name: Require exact reviewed immutable private commit
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "80e0b6b12ec3e59558ffe77cdc72e25e4c81ee09"
+          echo "RIGHT01_PRIVATE_SHA_PIN_PASS"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install existing foundation validation dependencies
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Verify book rights and public export regression (no external calls)
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test tests/right01-public-books-rights-gate.test.mjs tests/book-links-rights.test.mjs tests/book-archive-reader-footer.test.mjs tests/public-content-export-policy.test.mjs > "$RUNNER_TEMP/right01-rights-tests.log" 2>&1; then
+            echo "RIGHT01_RIGHTS_TESTS_PASS"
+          else
+            echo "::error::Book source/export rights regression failed; private logs withheld."
+            exit 1
+          fi
+      - name: Build sanitized public dist and check no unlicensed direct book media
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node scripts/test_public_site_build.mjs > "$RUNNER_TEMP/right01-dist-audit.log" 2>&1; then
+            echo "RIGHT01_DIST_MEDIA_LEAK_TEST_PASS"
+          else
+            echo "::error::Public distribution rights gate failed; private logs withheld."
+            exit 1
+          fi
+      - name: Run full baseline foundation without uploading internal source
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node scripts/check_site_foundation.mjs > "$RUNNER_TEMP/right01-foundation.log" 2>&1; then
+            echo "RIGHT01_FULL_PRIVATE_FOUNDATION_PASS"
+          else
+            echo "::error::Private foundation failed; withheld private test output."
+            exit 1
+          fi
+      - name: Confirm source remained unchanged and report aggregate-only evidence
+        working-directory: source
+        run: |
+          git diff --exit-code --quiet
+          {
+            echo '## RIGHT-01 — Source and public dist rights gates'
+            echo '- Exact private candidate SHA verified: `80e0b6b12ec3`'
+            echo '- 22-source book rights and synthetic future approved-edition tests: PASS'
+            echo '- Public dist excludes unlicensed Archive PDF manifests: PASS'
+            echo '- Complete private foundation: PASS'
+            echo '- Private source, logs, media and visitor data: never uploaded'
+            echo '- No model calls, Cloudflare writes or external license assertions'
+          } >> "$GITHUB_STEP_SUMMARY"
