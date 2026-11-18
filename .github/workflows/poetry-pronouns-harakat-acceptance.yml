@@ -1,0 +1,63 @@
+name: Free poetry 348 accurate harakat acceptance
+on:
+  push:
+    branches: [audit/poetry-pronouns-harakat-2026-11-18]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: aa413638b541f40109a0c132d52affb75e68a3ee
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install editor dependencies
+        run: python -m pip install --quiet python-frontmatter pyyaml
+      - name: Pin revision and enforce no edits to the underlying poem letters, verses, or metadata
+        run: |
+          test "$(git rev-parse HEAD)" = 'aa413638b541f40109a0c132d52affb75e68a3ee'
+          python - <<'PY'
+          import json,re,subprocess,pathlib
+          old=json.loads(subprocess.check_output(["git","show","818a9a308f7d3463789875ce98ba39bb0ce05cbb:content/poems.json"],text=True))['poems']
+          new=json.loads(pathlib.Path('content/poems.json').read_text())['poems']
+          assert len(old)==len(new)
+          marks=re.compile('[\\u0610-\\u061A\\u064B-\\u065F\\u0670\\u06D6-\\u06ED]')
+          changed=0
+          for a,b in zip(old,new):
+              assert a['slug']==b['slug']
+              if a.get('body')!=b.get('body'):
+                  changed+=1
+                  assert marks.sub('',a['body'])==marks.sub('',b['body']),b['slug']
+                  assert a['body'].count('\\n')==b['body'].count('\\n'),b['slug']
+                  aa={k:v for k,v in a.items() if k!='body'}
+                  bb={k:v for k,v in b.items() if k!='body'}
+                  assert aa==bb,b['slug']
+          assert changed==51,changed
+          print('SOURCE PRESERVATION SUCCESS: same consonants, same verses, same metadata; 51 improved poem records')
+          PY
+      - name: Test stable pronominal and punctuation harakat
+        run: |
+          node --test tests/editorial/poetry-pronominal-harakat.test.mjs
+          node --test tests/editorial/poetry-fixed-particles-harakat.test.mjs
+          node --test tests/poem-red-diacritics-no-heading.test.mjs tests/poem-red-diacritics-runtime.test.mjs
+      - name: Test all poem-body counts, manuscript rights, site foundations and regression suite
+        run: |
+          node --test tests/editorial/poems-completeness-regression.test.mjs tests/editorial/maari-batch01-index.test.mjs
+          python scripts/validate_library.py
+          node scripts/check_site_foundation.mjs
+          npm test
+      - name: Test safe public site build
+        run: node scripts/build_public_site.mjs
+      - name: Ensure validation did not modify private source
+        run: git diff --exit-code -- content/poems.json poem.html
