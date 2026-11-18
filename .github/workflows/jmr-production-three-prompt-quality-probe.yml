@@ -1,17 +1,16 @@
 name: JMR Production minimal live response quality and Quran safety probe
 
+# SEC-02 cost safeguard: real Workers AI requests require a deliberate manual run.
+# No automatic push, schedule or PR trigger may spend model quota.
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/jmr-production-three-prompt-quality-probe.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   live:
-    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.actor == 'aljamharah' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
