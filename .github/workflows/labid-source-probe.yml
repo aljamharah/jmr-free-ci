@@ -1,0 +1,33 @@
+name: Inspect verified 88-verse Labid poetic markup
+on:
+  push:
+    branches: [audit/labid-voweled-source-20261118]
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Inspect fully vocalized 88-verse Labid source
+        run: |
+          python -m pip -q install requests beautifulsoup4
+          python - <<'PY'
+          import requests,bs4,collections,json,re
+          url='https://mouallakat.com/poems/labid/'
+          r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0'});r.encoding='utf-8';s=bs4.BeautifulSoup(r.text,'html.parser')
+          cc=collections.Counter(x for e in s.find_all(True) for x in e.get('class') or [])
+          print('SITE',r.status_code,len(r.content),r.url)
+          print('CLASSES',cc.most_common(60))
+          hits=[]
+          for elem in s.find_all(['div','section','article','li','p']):
+            klass=' '.join(elem.get('class') or [])
+            if any(q in klass for q in ['verse','bayt','poem','hemistich','line']):
+              txt=elem.get_text(' ',strip=True)
+              if 5<len(txt)<500:
+                hits.append({'class':klass,'text':txt[:125],'html':str(elem)[:850]})
+          for obj in hits[:8]:
+            print('ELEMENT',json.dumps(obj,ensure_ascii=False))
+          PY
