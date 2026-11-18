@@ -1,4 +1,4 @@
-name: Free poetry 350 harakat latest-source acceptance
+name: Free poetry pronominal harakat and source union validation
 on:
   push:
     branches: [audit/poetry-pronouns-harakat-2026-11-18]
@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 99de5473f0bce62ced7576847fb4e25298a83d40
+          ref: 33270aa317d829d03f97ca5c8838b93685303e45
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           fetch-depth: 0
@@ -26,10 +26,10 @@ jobs:
         run: python -m pip install --quiet python-frontmatter pyyaml
       - name: Pin revision and enforce no edits to the underlying poem letters, verses, or metadata
         run: |
-          test "$(git rev-parse HEAD)" = '99de5473f0bce62ced7576847fb4e25298a83d40'
+          test "$(git rev-parse HEAD)" = '33270aa317d829d03f97ca5c8838b93685303e45'
           python - <<'PY'
           import json,re,subprocess,pathlib
-          old=json.loads(subprocess.check_output(["git","show","29b80e1b1f249809225da351a8c9871a3670f0b8:content/poems.json"],text=True))['poems']
+          old=json.loads(subprocess.check_output(["git","show","1b0d9e5df8fb47d6f982484cdc61b76b42f0a49a:content/poems.json"],text=True))['poems']
           new=json.loads(pathlib.Path('content/poems.json').read_text())['poems']
           assert len(old)==len(new)
           marks=re.compile('[\\u0610-\\u061A\\u064B-\\u065F\\u0670\\u06D6-\\u06ED]')
