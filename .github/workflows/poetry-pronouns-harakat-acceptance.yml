@@ -1,4 +1,4 @@
-name: Free poetry pronominal harakat and source union validation
+name: Free poetry 319 stable-function-word vocalization acceptance
 on:
   push:
     branches: [audit/poetry-pronouns-harakat-2026-11-18]
@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 33270aa317d829d03f97ca5c8838b93685303e45
+          ref: 68c13863e3c80c3556827783b95b7707096c9218
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           persist-credentials: false
           fetch-depth: 0
@@ -26,10 +26,10 @@ jobs:
         run: python -m pip install --quiet python-frontmatter pyyaml
       - name: Pin revision and enforce no edits to the underlying poem letters, verses, or metadata
         run: |
-          test "$(git rev-parse HEAD)" = '33270aa317d829d03f97ca5c8838b93685303e45'
+          test "$(git rev-parse HEAD)" = '68c13863e3c80c3556827783b95b7707096c9218'
           python - <<'PY'
           import json,re,subprocess,pathlib
-          old=json.loads(subprocess.check_output(["git","show","1b0d9e5df8fb47d6f982484cdc61b76b42f0a49a:content/poems.json"],text=True))['poems']
+          old=json.loads(subprocess.check_output(["git","show","21e373d6b004806b649ace654f6e8f84ce225eed:content/poems.json"],text=True))['poems']
           new=json.loads(pathlib.Path('content/poems.json').read_text())['poems']
           assert len(old)==len(new)
           marks=re.compile('[\\u0610-\\u061A\\u064B-\\u065F\\u0670\\u06D6-\\u06ED]')
@@ -43,12 +43,12 @@ jobs:
                   aa={k:v for k,v in a.items() if k!='body'}
                   bb={k:v for k,v in b.items() if k!='body'}
                   assert aa==bb,b['slug']
-          assert changed==56,changed
-          print('SOURCE PRESERVATION SUCCESS: same consonants, same verses, same metadata; 56 improved poem records')
+          assert changed==33,changed
+          print('SOURCE PRESERVATION SUCCESS: same consonants, same verses, same metadata; 33 improved poem records')
           PY
       - name: Test stable pronominal and punctuation harakat
         run: |
-          node --test tests/editorial/poetry-pronominal-harakat.test.mjs
+          node --test tests/editorial/poetry-stable-word-harakat.test.mjs tests/editorial/poetry-pronominal-harakat.test.mjs
           node --test tests/editorial/poetry-fixed-particles-harakat.test.mjs
           node --test tests/poem-red-diacritics-no-heading.test.mjs tests/poem-red-diacritics-runtime.test.mjs
       - name: Test all poem-body counts, manuscript rights, site foundations and regression suite
