@@ -28,6 +28,10 @@ jobs:
           // All 20 requests contain deliberately invalid JSON. In source functions/api/jmr.js,
           // rate-limit check executes BEFORE JSON.parse and the AI invocation happens much later.
           const requests=20;
+          // Avoid the UTC minute boundary: all 20 requests must share one limiter window.
+          // No additional model requests or separate Cloudflare credentials are required.
+          const msRemaining=60000-(Date.now()%60000);
+          if(msRemaining<30000) await new Promise(resolve=>setTimeout(resolve,msRemaining+1250));
           const epochMinute=Math.floor(Date.now()/60000);
           const run=()=>fetch(base+'/api/jmr',{method:'POST',redirect:'manual',
             headers:{'Content-Type':'application/json','Accept':'application/json'},
@@ -55,5 +59,39 @@ jobs:
             counts.unavailable_503!==0||counts.other!==0){
             throw Error('Unexpected 12/8 concurrency split; investigate real rate limit before accepting production');
           }
-          console.log('PASS: 12 malformed requests admitted before parse; 8 rejected by rate limiter. No model API call.');
+          // Verify that the production limiter resets in the next UTC minute, with one
+          // additional malformed request (HTTP 400), never a request to the AI model.
+          const nextWindowMs=(Math.floor(Date.now()/60000)+1)*60000-Date.now()+1250;
+          await new Promise(resolve=>setTimeout(resolve,nextWindowMs));
+          const reset=await run();
+          if(reset.status!==400) throw Error('Next-minute reset not verified: expected HTTP 400, got '+reset.status);
+          const summary={
+            test:'OPS-01 production no-model limiter', concurrent_malformed_requests:requests,
+            admitted_400:counts.bad_json_400,blocked_429:counts.limited_429,
+            expected_limit_stage_429:counts['429_limit_stage'],
+            unavailable_503:counts.unavailable_503,other:counts.other,
+            same_utc_minute:sameMinute,new_minute_reset_400:true,no_model_calls:true,
+            verdict:'PASS'
+          };
+          if(process.env.GITHUB_STEP_SUMMARY){
+            const {appendFileSync}=await import('node:fs');
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY,[
+              '## OPS-01 — Production JMR limiter',
+              '',
+              '| Safe aggregate metric | Verified |',
+              '| --- | ---: |',
+              '| Concurrent malformed requests | '+requests+' |',
+              '| Admitted HTTP 400 | '+counts.bad_json_400+' |',
+              '| Blocked HTTP 429 with limit stage | '+counts['429_limit_stage']+' |',
+              '| HTTP 503 or other | '+(counts.unavailable_503+counts.other)+' |',
+              '| First request in new minute | HTTP 400 |',
+              '| Model invocations | 0 |',
+              '| Verdict | PASS |',
+              '',
+              'Scope: a single GitHub runner IP and one production interval; backend outage simulation not performed.',
+              ''
+            ].join('\n'));
+          }
+          console.log(JSON.stringify(summary));
+          console.log('PASS: 12 concurrent malformed requests admitted, 8 rate-limited; new-minute reset admitted one. No model call.');
           NODE
