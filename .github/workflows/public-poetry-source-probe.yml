@@ -1,4 +1,4 @@
-name: Find four classical source poems without private corpus access
+name: Locate Labid original poem
 on:
   push:
     branches: [audit/poetry-voweled-sources-20261118]
@@ -6,31 +6,18 @@ permissions: {contents: read}
 jobs:
   locate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - name: Locate original poet-linked texts
+      - name: Locate fully vowelled Labid source from author's table of contents
         run: |
           python -m pip -q install requests beautifulsoup4
           python - <<'PY'
-          import re,json,requests,bs4,time
-          base='https://poetry.dct.gov.ae'
-          initial={
-           'tarafa':base+'/poets/354-طرفة-بن-العبد',
-           'zuhair':base+'/poets/355-زهير-بن-أبي-سلمى',
-           'labid-seed':base+'/poems/2397-',
-           'antar':base+'/poems/9850-هل-غادر-الشعراء-من-متردم'
-          }
-          for key,url in initial.items():
-           try:
-            r=requests.get(url,timeout=26,headers={'User-Agent':'Mozilla/5.0'});r.encoding='utf-8';s=bs4.BeautifulSoup(r.text,'html.parser')
-            links=[(a.get_text(' ',strip=True)[:75],a.get('href','')) for a in s.select('a[href]') if '/poems/' in a.get('href','') or '/poets/' in a.get('href','')]
-            items=[(t,h) for t,h in links if any(q in t.replace('ـ','') for q in ['لخولة','لِخَوْلَةَ','لِخَوْلَة','أَوْفَى','عَفَت','عفت','لَبيد','لَبِيد'])]
-            first=s.select('section.poem-body tr.poem-verses')
-            first=[[' '.join(w.get_text(' ',strip=True) for w in td.select('span.word-search')) for td in row.select('td.poem-verses__part')] for row in first[:2]]
-            print('LOOKUP',json.dumps({'key':key,'status':r.status_code,'final':r.url,'title':s.title.get_text(' ',strip=True)[:80] if s.title else '', 'matched':items[:20],'first_verses':first,'all_poem_links':len(links)},ensure_ascii=False),flush=True)
-           except Exception as e:print('ERROR',key,str(e)[:180])
-           time.sleep(.2)
+          import requests,bs4,json
+          url='https://poetry.dct.gov.ae/poets/361-لبيد-بن-ربيعة'
+          r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0'});r.encoding='utf-8';s=bs4.BeautifulSoup(r.text,'html.parser')
+          matches=[{'text':a.get_text(' ',strip=True)[:85],'href':a.get('href','')} for a in s.select('a[href]') if 'عَفَت' in a.get_text(' ',strip=True) or 'عفت' in a.get_text(' ',strip=True)]
+          print('LABID_LINK',json.dumps({'status':r.status_code,'title':s.title.get_text(' ',strip=True) if s.title else '', 'matches':matches[:15]},ensure_ascii=False),flush=True)
           PY
