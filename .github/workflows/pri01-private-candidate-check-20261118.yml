@@ -1,0 +1,65 @@
+name: PRI-01 exact private PR privacy validation (read-only)
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/pri01-private-candidate-check-20261118.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: pri01-private-qa-once
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 26
+    steps:
+      - name: Checkout exact reviewed private candidate (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 9ef9c17e408ffc8f050f7193431763b5b2e6ad11
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - name: Refuse any unexpected private revision
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "9ef9c17e408ffc8f050f7193431763b5b2e6ad11"
+          echo "PRI01_EXACT_PRIVATE_SHA_OK"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install existing foundation dependencies (no model calls)
+        run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null
+      - name: Test runtime error redaction and existing privacy contracts
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test tests/pri01-privacy-runtime-logs.test.mjs tests/privacy-disclosure-contract.test.mjs tests/j07-local-data-erasure-controls.test.mjs tests/rate-limit.test.js > "$RUNNER_TEMP/pri01-private-test.log" 2>&1; then
+            echo "PRI01_PRIVACY_TESTS_PASS"
+          else
+            echo "::error::Privacy/limiter tests failed. Do not publish private test output in public CI."
+            exit 1
+          fi
+      - name: Run complete private foundation without publishing logs
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node scripts/check_site_foundation.mjs > "$RUNNER_TEMP/pri01-foundation.log" 2>&1; then
+            echo "PRI01_PRIVATE_FOUNDATION_PASS"
+          else
+            echo "::error::Private source foundation failed. Keep logs private and review changes before merge."
+            exit 1
+          fi
+      - name: Confirm no source changes or private artifacts
+        working-directory: source
+        run: |
+          git diff --exit-code --quiet
+          echo "PRI01_SOURCE_UNCHANGED_PASS"
+          echo "Privacy metadata and aggregate pass/fail only. No visitor data, secrets, transcripts, external POST, or Workers AI calls."
