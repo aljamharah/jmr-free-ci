@@ -5,7 +5,7 @@ import { appendFileSync } from 'node:fs';
 const BASE = 'https://aljamharah.pages.dev';
 const MAX_BOOKS = 50;
 const failures = [];
-const report = { book_records: 0, book_mobile: 0, book_desktop: 0, books_with_inline_frame: 0, books_with_text: 0, books_with_source_notice: 0, poem_actions: 0, model_calls: 0, external_frames_loaded: false };
+const report = { book_records: 0, book_mobile: 0, book_desktop: 0, books_with_inline_frame: 0, books_with_text: 0, books_with_source_notice: 0, poem_actions: 0, share_actions: 0, print_actions: 0, model_calls: 0, external_frames_loaded: false };
 
 async function getJSON(path) {
   const url = new URL(path, BASE);
@@ -49,6 +49,15 @@ try {
       const request=route.request(), url=new URL(request.url());
       return request.method()==='GET' && url.origin===BASE ? route.continue() : route.abort();
     });
+    // Intercept local clipboard and print only inside the disposable browser.
+    // Never activate a real OS print dialog or share to third parties.
+    await ctx.addInitScript(() => {
+      window.__test01 = {copied:'',printCalls:0};
+      Object.defineProperty(navigator,'share',{configurable:true,value:undefined});
+      Object.defineProperty(navigator,'clipboard',{configurable:true,
+        value:{writeText:async text=>{window.__test01.copied=String(text);}}});
+      window.print=()=>{window.__test01.printCalls++;};
+    });
     const page = await ctx.newPage();
     const javascriptErrors=[];
     page.on('pageerror', e=>javascriptErrors.push(e.name));
@@ -82,7 +91,10 @@ try {
       const poemSample=publishedPoems.slice(0,Math.min(3,publishedPoems.length));
       for(const [i,poem] of poemSample.entries()){
         try{
-          const response=await page.goto(BASE+'/poem.html?slug='+encodeURIComponent(poem.slug),{waitUntil:'domcontentloaded',timeout:28000});
+          const detailUrl=BASE+'/poem.html?slug='+encodeURIComponent(poem.slug)+
+            '&from='+encodeURIComponent('catalog.html?group=arab-poetry&item=muallaqat')+
+            '&utm_source=verification';
+          const response=await page.goto(detailUrl,{waitUntil:'domcontentloaded',timeout:28000});
           assert.equal(response?.status(),200);
           await page.locator('#poemVerses .verse-line').first().waitFor({state:'visible',timeout:15000});
           assert.equal((await page.locator('#poemHero h1').innerText()).trim(),poem.title.trim());
@@ -97,8 +109,21 @@ try {
           assert.equal(await page.locator('#removeDiacritics').getAttribute('aria-pressed'),'false');
           assert.equal(await page.locator('#poemVerses').innerText(), before);
           await page.locator('#copyPoem').click();
+          await page.waitForFunction(()=>window.__test01?.copied?.length>0,{timeout:8000});
+          assert.equal(await page.evaluate(()=>window.__test01.copied),poem.body,
+            'Copy must preserve original published poem text');
           await page.locator('#poemActionFeedback.show').waitFor({state:'visible',timeout:8000});
           report.poem_actions++;
+          const expectedShare=BASE+'/poem.html?slug='+encodeURIComponent(poem.slug);
+          await page.locator('#sharePoem').click();
+          await page.waitForFunction(expected=>window.__test01?.copied===expected,expectedShare,{timeout:8000});
+          const sharedUrl=await page.evaluate(()=>window.__test01.copied);
+          assert.equal(sharedUrl,expectedShare,'Canonical share must strip private from and tracking parameters');
+          report.share_actions++;
+          await page.locator('#print').click();
+          assert.equal(await page.evaluate(()=>window.__test01.printCalls),1,
+            'Print button did not call the intercepted browser print API');
+          report.print_actions++;
         }catch(e){failures.push('Poem sample #'+(i+1)+': '+String(e.message).slice(0,150));}
       }
     }
@@ -113,7 +138,9 @@ const summary=[
  '- Book detail pages at 390px: '+report.book_mobile+', at 1280px: '+report.book_desktop,
  '- Inline frame present per inspected book: '+report.books_with_inline_frame,
  '- Text-only reading state: '+report.books_with_text+', source/unavailable state: '+report.books_with_source_notice,
- '- Poem action samples (diacritics off/on, feedback, text preservation): '+report.poem_actions,
+ '- Poem copy samples (diacritics off/on, feedback, clipboard preservation): '+report.poem_actions,
+ '- Canonical share tests (strip navigation/tracking parameters): '+report.share_actions,
+ '- Print action tests (intercepted; no real printer opened): '+report.print_actions,
  '- Failures: '+failures.length,
  '- Not covered: third-party PDF render, rights provenance, actual iPhone/Android, color-glyph shape/harakat accuracy, model calls',
  ...(failures.length? ['- Failures (public row positions only): '+failures.slice(0,10).join('; ')]:[])
