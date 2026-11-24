@@ -51,9 +51,25 @@ jobs:
             echo RIGHT01_FOUNDATION_PASS
           else
             echo "::error::RIGHT01_FOUNDATION_FAIL (private logs withheld)"
+            node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const log=readFileSync(process.env.RUNNER_TEMP+'/right01-foundation.log','utf8');
+          const labels=['Internal page/asset references','Sanitized deploy-only dist and draft privacy','Unified header and functional search navigation','Lexicon integrity','Lexicon fast search','Quran corpus integrity','JMR API behavior and input guards','JMR failure paths, free-tier quota and rate limits','JMR runtime regression tests','Node unit tests'];
+          for(const label of labels){
+            if(log.includes('FAILED: '+label+' ('))console.log('RIGHT01_FAILED_SUITE='+label);
+            if(log.includes('PASSED: '+label))console.log('RIGHT01_PASSED_SUITE='+label);
+          }
+          NODE
+            for file in tests/book-archive-reader-footer.test.mjs tests/book-archive-verified-subprefixes.test.mjs tests/book-pdf-pagination.test.mjs tests/book-printed-edition-access.test.mjs tests/book-reader-first-pdf-collapse.test.mjs tests/books-original-archive-pdf-links.test.mjs tests/j06-library-book-reader-navigation.test.mjs tests/right01-public-books-rights-gate.test.mjs tests/public-content-export-policy.test.mjs; do
+              if node --test "$file" > "$RUNNER_TEMP/right01-component.log" 2>&1; then
+                echo "RIGHT01_COMPONENT_PASS=$file"
+              else
+                echo "RIGHT01_COMPONENT_FAIL=$file"
+              fi
+            done
             exit 1
           fi
-      - name: Check Archive metadata and HTTP file availability without downloading books
+      - name: Check Archive metadata, HEAD and bounded PDF signature
         if: always() && steps.pin.outcome == 'success'
         working-directory: source
         shell: bash
@@ -63,7 +79,7 @@ jobs:
           const index=JSON.parse(readFileSync('content/books/index.json','utf8'));
           const records=index.books.map(b=>JSON.parse(readFileSync(b.record,'utf8')));
           const groups=new Map();
-          const counts={records:records.length,invalid:0,metadataFailures:0,restricted:0,missing:0,unavailable:0,headPass:0,headUnknown:0};
+          const counts={records:records.length,invalid:0,metadataFailures:0,restricted:0,missing:0,unavailable:0,headPass:0,rangePass:0,headUnknown:0};
           for(const record of records){
             const match=/^https:\/\/archive\.org\/details\/([A-Za-z0-9][A-Za-z0-9._-]{0,100})$/.exec(record.archive_item_url||'');
             if(!match){counts.invalid++;continue}
@@ -82,19 +98,47 @@ jobs:
             }
           }
           const yes=v=>v===true||v===1||v==='true'||v==='1';
-          async function head(url){
+          async function request(url,method){
             for(let i=0;i<5;i++){
               const u=new URL(url);
-              if(u.protocol!=='https:'||!(u.hostname==='archive.org'||u.hostname.endsWith('.archive.org'))||u.username||u.password)return 'unknown';
-              const r=await fetch(u,{method:'HEAD',redirect:'manual',signal:AbortSignal.timeout(18000)});
+              if(u.protocol!=='https:'||!(u.hostname==='archive.org'||u.hostname.endsWith('.archive.org'))||u.username||u.password)return null;
+              const r=await fetch(u,{method,headers:method==='GET'?{'Range':'bytes=0-1023','Accept-Encoding':'identity'}:{},redirect:'manual',signal:AbortSignal.timeout(18000)});
               if(r.status>=300&&r.status<400&&r.headers.get('location')){
+                if(r.body)await r.body.cancel().catch(()=>{});
                 url=new URL(r.headers.get('location'),u).href;continue;
               }
-              if(r.ok&&/application\/pdf/i.test(r.headers.get('content-type')||'')&&Number(r.headers.get('content-length'))>0)return 'pass';
-              if([401,403,404,410,451].includes(r.status))return 'unavailable';
-              return 'unknown';
+              return r;
             }
+            return null;
+          }
+          async function head(url){
+            const r=await request(url,'HEAD');
+            if(!r)return 'unknown';
+            if(r.ok&&/application\/pdf/i.test(r.headers.get('content-type')||'')&&Number(r.headers.get('content-length'))>0)return 'pass';
+            if([401,403,404,410,451].includes(r.status))return 'unavailable';
             return 'unknown';
+          }
+          async function rangeProbe(url){
+            const r=await request(url,'GET');
+            if(!r)return 'unknown';
+            if(![200,206].includes(r.status)){
+              if(r.body)await r.body.cancel().catch(()=>{});
+              return [401,403,404,410,451].includes(r.status)?'unavailable':'unknown';
+            }
+            if(!r.body)return 'unknown';
+            const reader=r.body.getReader();
+            let first=new Uint8Array(0);
+            try{
+              while(first.length<1024){
+                const {done,value}=await reader.read();
+                if(done)break;
+                const take=value.subarray(0,1024-first.length);
+                const next=new Uint8Array(first.length+take.length);
+                next.set(first);next.set(take,first.length);first=next;
+                if(new TextDecoder().decode(first).includes('%PDF-'))return 'pass';
+              }
+              return 'unknown';
+            }finally{await reader.cancel().catch(()=>{});}
           }
           async function verify([item,files]){
             let data;
@@ -109,12 +153,15 @@ jobs:
               const entry=data.files.find(f=>f.name===file);
               if(!entry||!(Number(entry.size)>0)){counts.missing++;continue}
               if(yes(entry.private)){counts.restricted++;continue}
-              try{
-                const result=await head('https://archive.org/download/'+encodeURIComponent(item)+'/'+encodeURIComponent(file));
-                if(result==='pass')counts.headPass++;
-                else if(result==='unavailable')counts.unavailable++;
-                else counts.headUnknown++;
-              }catch{counts.headUnknown++}
+              const url='https://archive.org/download/'+encodeURIComponent(item)+'/'+encodeURIComponent(file);
+              let result='unknown';
+              try{result=await head(url)}catch{}
+              if(result==='pass'){counts.headPass++;continue}
+              if(result==='unavailable'){counts.unavailable++;continue}
+              try{result=await rangeProbe(url)}catch{}
+              if(result==='pass')counts.rangePass++;
+              else if(result==='unavailable')counts.unavailable++;
+              else counts.headUnknown++;
             }
           }
           const pending=[...groups];
