@@ -1,0 +1,61 @@
+name: JMR-01 pinned premerge parity
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/jmr01-premerge-pinned-parity.yml']
+permissions:
+  contents: read
+jobs:
+  gate:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.actor == 'aljamharah' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: '5e114de460aa8d0c749285ac946a58b0dbe1c0bc'
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: baseline
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: '7f09e8bfdd9ba461c96b421b297916983f962ac3'
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: candidate
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check python-frontmatter pyyaml >/dev/null
+      - name: Verify pins and create local merge
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = '5e114de460aa8d0c749285ac946a58b0dbe1c0bc'
+          test "$(git -C candidate rev-parse HEAD)" = '7f09e8bfdd9ba461c96b421b297916983f962ac3'
+          git -C candidate -c user.name='Ephemeral Audit' -c user.email='audit@invalid.example' merge --no-ff --no-edit '5e114de460aa8d0c749285ac946a58b0dbe1c0bc' >/dev/null
+          expected="$(printf '%s\n' docs/JMR01-PRIVATE-EVALUATOR-AR.md scripts/jmr01_private_evaluator.mjs scripts/test_jmr01_private_evaluator.mjs)"
+          actual="$(git -C candidate diff --name-only '5e114de460aa8d0c749285ac946a58b0dbe1c0bc' HEAD | sort)"
+          test "$actual" = "$expected"
+      - name: Offline foundation and evaluator tests
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          export CI=true
+          node --test scripts/test_jmr01_private_evaluator.mjs >/tmp/jmr01-evaluator.log 2>&1 || { echo 'Evaluator failed'; exit 1; }
+          node scripts/check_site_foundation.mjs >/tmp/jmr01-foundation.log 2>&1 || { echo 'Foundation failed'; grep '^FAILED:\|^Jamharah technical foundation:' /tmp/jmr01-foundation.log || true; exit 1; }
+          grep '^Jamharah technical foundation:' /tmp/jmr01-foundation.log
+      - name: Build and check byte identical public output
+        run: |
+          set -euo pipefail
+          (cd baseline && node scripts/build_public_site.mjs >/tmp/jmr01-baseline.log 2>&1)
+          (cd candidate && node scripts/build_public_site.mjs >/tmp/jmr01-candidate.log 2>&1)
+          (cd candidate && node scripts/validation/compare-public-dist.mjs ../baseline/build-reports/dist-inventory.json build-reports/dist-inventory.json)
+          git -C baseline diff --exit-code
+          git -C candidate diff --exit-code
+          echo 'JMR01_PREMERGE_PINNED_PARITY_PASS: exact base and head, offline foundation, identical dist; no model calls.'
