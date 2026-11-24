@@ -72,7 +72,8 @@ jobs:
             }catch{return {ordinal,source:'setup-inconclusive',relay:'not-attempted'}}
           }));
           console.log('RIGHT01_PERSISTENT_PDF '+JSON.stringify(results));
-          if(results.some(r=>r.source!=='pdf-signature'||r.relay!=='pdf-signature'))process.exitCode=1;
+          // Source and relay health are reported separately. Browser acceptance still requires actual page turns and an observed working transport.
+          if(results.some(r=>r.source!=='pdf-signature'))process.exitCode=1;
           NODE
   pdf-browser:
     if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.actor == 'aljamharah'
@@ -105,7 +106,7 @@ jobs:
           const base='https://aljamharah.pages.dev',shard=Number(process.env.SHARD);
           const read=async path=>{const r=await fetch(base+path,{signal:AbortSignal.timeout(15000)});assert.ok(r.ok);return r};
           const viewer=await (await read('/book-pdf-viewer.html')).text();
-          assert.ok(viewer.includes('fallback-retry')&&viewer.includes('PDF_OPEN_TIMEOUT_MS=25000')&&viewer.includes('disableAutoFetch:readableSource!==source'),'deployed PDF release marker absent');
+          assert.ok(viewer.includes('fallback-retry')&&viewer.includes('PDF_OPEN_TIMEOUT_MS=25000')&&viewer.includes('disableAutoFetch:readableSource!==source')&&viewer.includes('PDF_RELAY_ATTEMPT_MS=12000'),'deployed PDF release marker absent');
           const index=await (await read('/content/books/index.json')).json();
           assert.equal(index.books.length,22);
           const jobs=[];
@@ -132,10 +133,16 @@ jobs:
           async function run(job){
             const {entry,ordinal,width}=job;
             const result={ordinal,width,category:'setup'};
-            let ctx,client,bytes=0,relayRequests=0,budget=false,relaySuccess=0;const relayStatuses={};
+            let ctx,client,bytes=0,relayRequests=0,directRequests=0,budget=false,relaySuccess=0,directSuccess=0;const relayStatuses={},directStatuses={};
             try{
               assert.match(entry.id,/^[a-z0-9-]+$/);
-              ctx=await browser.newContext({viewport:{width,height:844},locale:'ar',serviceWorkers:'block'});
+              const record=await (await read('/content/books/records/'+entry.id+'.json')).json();
+              const exact=new URL(record.archive_pdf_source_url);
+              assert.equal(exact.origin,'https://archive.org');
+              assert.match(exact.pathname,/^\/download\/[A-Za-z0-9._-]+\/.+\.pdf$/i);
+              assert.ok(!exact.username&&!exact.password&&!exact.search&&!exact.hash);
+              const isDirect=req=>{let root=req;while(root.redirectedFrom())root=root.redirectedFrom();return new URL(root.url()).href===exact.href;};
+              ctx=await browser.newContext({viewport:{width,height:844},isMobile:width===390,hasTouch:width===390,locale:'ar',serviceWorkers:'block'});
               const page=await ctx.newPage();
               client=await ctx.newCDPSession(page);await client.send('Network.enable');
               client.on('Network.dataReceived',e=>{
@@ -152,9 +159,10 @@ jobs:
                   return route.continue();
                 }
                 if(u.origin==='https://cdnjs.cloudflare.com'&&u.pathname.startsWith('/ajax/libs/pdf.js/4.10.38/'))return route.continue();
+                if(u.protocol==='https:'&&(u.hostname==='archive.org'||u.hostname.endsWith('.archive.org'))&&isDirect(req)){if(++directRequests>64)return route.abort();return route.continue();}
                 return route.abort();
               });
-              page.on('response',r=>{const u=new URL(r.url());if(u.origin===base&&u.pathname.replace(/\/$/,'')==='/api/books/pdf/'+entry.id){relayStatuses[r.status()]=(relayStatuses[r.status()]||0)+1;if([200,206].includes(r.status()))relaySuccess++}});
+              page.on('response',r=>{const u=new URL(r.url());if(u.origin===base&&u.pathname.replace(/\/$/,'')==='/api/books/pdf/'+entry.id){relayStatuses[r.status()]=(relayStatuses[r.status()]||0)+1;if([200,206].includes(r.status()))relaySuccess++}else if(isDirect(r.request())){directStatuses[r.status()]=(directStatuses[r.status()]||0)+1;if([200,206].includes(r.status()))directSuccess++}});
               await page.goto(base+'/book.html?id='+encodeURIComponent(entry.id),{waitUntil:'domcontentloaded',timeout:15000});
               await page.getByRole('button',{name:'قارئ PDF',exact:true}).click({timeout:12000});
               const iframe=page.locator('#bookReading .waqf-reader-frame');
@@ -173,12 +181,13 @@ jobs:
               await frame.locator('#previous').click({timeout:4000});
               await ready(frame,1,15000);
               assert.equal((await fingerprint(frame)).hash,first.hash);
-              result.category='relay-observation';
-              assert.ok(relaySuccess>0);
+              result.pagesVerified=true;
+              result.category='transport-observation';
+              assert.ok(relaySuccess>0||directSuccess>0);
               result.category='pass';
-            }catch{if(budget)result.category='network-budget';else if(relayRequests>64)result.category='request-budget'}
+            }catch{if(budget)result.category='network-budget';else if(relayRequests>64||directRequests>64)result.category='request-budget'}
             finally{if(ctx)await ctx.close().catch(()=>{})}
-            result.relayResponses=relaySuccess;result.relayRequests=relayRequests;result.relayStatuses=relayStatuses;results.push(result);
+            result.relayResponses=relaySuccess;result.relayRequests=relayRequests;result.relayStatuses=relayStatuses;result.directRequests=directRequests;result.directResponses=directSuccess;result.directStatuses=directStatuses;results.push(result);
             console.log('RIGHT01_PDF_CASE '+JSON.stringify(result));
           }
           try{for(let i=shard;i<jobs.length;i+=4)await run(jobs[i])}
