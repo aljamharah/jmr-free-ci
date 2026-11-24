@@ -98,13 +98,22 @@ try {
           assert.equal(response?.status(),200);
           await page.locator('#poemVerses .verse-line').first().waitFor({state:'visible',timeout:15000});
           assert.equal((await page.locator('#poemHero h1').innerText()).trim(),poem.title.trim());
+          // Verify the deployed function on both decomposed and precomposed Arabic letters.
+          const preserves=await page.evaluate(()=>{
+            const cases=[
+              ["ا\u0654َ","ا\u0654"],["ا\u0655ِ","ا\u0655"],["ا\u0653","ا\u0653"],["ا\u065F","ا\u065F"],
+              ["أَ إِ آ ؤُ ئِ بَ تِ ثٌ","أ إ آ ؤ ئ ب ت ث"],["السَّيْفُ","السيف"]
+            ];
+            return typeof window.stripTashkeel==='function'&&cases.every(([a,b])=>window.stripTashkeel(a)===b);
+          });
+          assert.ok(preserves,'Deployed vowel removal must preserve combining letter components');
           const before=await page.locator('#poemVerses').innerText();
           assert.ok(/[\u064B-\u065F\u0670]/u.test(before),'Visible poem has no diacritics');
           await page.locator('#removeDiacritics').click();
           assert.equal(await page.locator('#removeDiacritics').getAttribute('aria-pressed'),'true');
           const stripped=await page.locator('#poemVerses').innerText();
-          assert.doesNotMatch(stripped,/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]/u);
-          assert.equal(stripped, before.replace(/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]/gu,''));
+          assert.doesNotMatch(stripped,/[\u0610-\u061A\u064B-\u0652\u0656-\u065E\u0670\u06D6-\u06ED]/u);
+          assert.equal(stripped, before.replace(/[\u0610-\u061A\u064B-\u0652\u0656-\u065E\u0670\u06D6-\u06ED]/gu,''));
           await page.locator('#removeDiacritics').click();
           assert.equal(await page.locator('#removeDiacritics').getAttribute('aria-pressed'),'false');
           assert.equal(await page.locator('#poemVerses').innerText(), before);
