@@ -51,13 +51,13 @@ jobs:
             if(!target)await p.goto(src,{waitUntil:'domcontentloaded',timeout:25000});
             await f.waitForFunction(()=>[...document.querySelectorAll('#BookReader img,.BRpagecontainer img,img.BRpageimage')].some(x=>x.complete&&x.naturalWidth>=100),null,{timeout:25000});
             console.log('ARCHIVE_PROBE_INITIAL '+label+' '+JSON.stringify(safe(await f.evaluate(state))));
-            for(const selector of ['button.BRicon.book_right','button.BRicon.book_left','button[title="Next page"]','button[aria-label="Next page"]']){
+            for(const selector of ['button.book_flip_next:visible','button.book_flip_prev:visible']){
               const c=f.locator(selector).first();
               if(!await c.isVisible().catch(()=>false))continue;
               const before=safe(await f.evaluate(state));
               let clicked=true;
               try{await c.click({timeout:3000})}catch{clicked=false}
-              await p.waitForTimeout(1500);
+              await p.waitForTimeout(2500);
               const after=safe(await f.evaluate(state));
               console.log('ARCHIVE_PROBE_CLICK '+JSON.stringify({label,selector,clicked,before:{index:before.index,hash:before.hash,images:before.images},after:{index:after.index,hash:after.hash,images:after.images}}));
             }
