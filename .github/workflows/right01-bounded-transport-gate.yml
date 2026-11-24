@@ -1,0 +1,50 @@
+name: RIGHT-01 bounded transport qualification
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/right01-bounded-transport-gate.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: b11dd1c322702b09977a53cb2bddc229c4b9c202
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pin and test transport without external requests
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "b11dd1c322702b09977a53cb2bddc229c4b9c202"
+          if node --test tests/book-archive-pdf-relay.test.mjs tests/right01-reader-volume-consistency.test.mjs tests/right01-pdf-fallback-retry.test.mjs > "$RUNNER_TEMP/right01-transport.log" 2>&1; then
+            echo RIGHT01_BOUNDED_TRANSPORT_PASS
+          else
+            echo "::error::RIGHT01_BOUNDED_TRANSPORT_FAIL (private logs withheld)"
+            exit 1
+          fi
+      - name: Run full foundation
+        working-directory: source
+        run: |
+          python -m pip install --disable-pip-version-check python-frontmatter pyyaml >/dev/null 2>&1
+          if node scripts/check_site_foundation.mjs > "$RUNNER_TEMP/right01-foundation.log" 2>&1; then
+            echo RIGHT01_FOUNDATION_PASS
+          else
+            echo "::error::RIGHT01_FOUNDATION_FAIL (private logs withheld)"
+            exit 1
+          fi
+      - name: Confirm source unchanged
+        if: always()
+        working-directory: source
+        run: git diff --exit-code --quiet
