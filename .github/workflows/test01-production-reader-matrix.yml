@@ -8,7 +8,7 @@ permissions:
 jobs:
   reader:
     if: github.repository == 'aljamharah/jmr-free-ci' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'test/test01-production-reader-20261124'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -22,6 +22,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install browser tooling
+        id: browser-install
         run: |
           mkdir -p "$RUNNER_TEMP/reader-audit"
           cd "$RUNNER_TEMP/reader-audit"
@@ -173,7 +174,7 @@ jobs:
           JS
           node audit.mjs
       - name: Existing copy, sharing, print and diacritics regression
-        if: always() && matrix.device == 'desktop'
+        if: always() && steps.browser-install.outcome == 'success' && matrix.device == 'desktop'
         run: |
           cp scripts/test01-live-content-journeys.mjs "$RUNNER_TEMP/reader-audit/regression.mjs"
           cd "$RUNNER_TEMP/reader-audit"
