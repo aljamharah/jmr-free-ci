@@ -9,7 +9,7 @@ jobs:
   reader:
     if: github.repository == 'aljamharah/jmr-free-ci' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'test/test01-production-reader-20261124'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -86,12 +86,33 @@ jobs:
             assert.ok(p.length===4&&decodeURIComponent(p[3]).toLowerCase().endsWith('.pdf'));
             return '/embed/'+p[2]+'/'+encodeURIComponent(decodeURIComponent(p[3]).slice(0,-4));
           };
-          const imageSignature=()=>Array.from(document.querySelectorAll('.BRpageimage, .BRpagecontainer img, .BRpageview img')).filter(x=>{
-            const r=x.getBoundingClientRect();return x.naturalWidth>50&&r.width>20&&r.height>20&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth;
-          }).map(x=>x.currentSrc||x.src).sort().join('|');
-          const imageReady=()=>Array.from(document.querySelectorAll('.BRpageimage, .BRpagecontainer img, .BRpageview img')).some(x=>{
-            const r=x.getBoundingClientRect();return x.naturalWidth>50&&r.width>20&&r.height>20&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth;
-          });
+          // Observe actual BookReader page state as well as decoded page images.
+          const snapshot=()=> {
+            const br=[window.br,window.bookReader,window.bookreader,window.BookReader?.instance].find(x=>x&&typeof x.currentIndex==='function');
+            const all=Array.from(document.querySelectorAll('#BookReader img, .BRpagecontainer img, img.BRpageimage, .BRpageview img'));
+            const loaded=all.filter(x=>x.complete&&x.naturalWidth>=100&&x.naturalHeight>=100);
+            const visible=loaded.filter(x=>{
+              const r=x.getBoundingClientRect();
+              return r.width>10&&r.height>10&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth;
+            });
+            return {idx:br?Number(br.currentIndex()):null,hash:location.hash,
+              images:visible.map(x=>x.currentSrc||x.src).sort().join('|'),
+              loaded:loaded.length,visible:visible.length,controls:document.querySelectorAll('button.BRicon.book_right, button.BRicon.book_left, .BRnavCntlNxt, button[title="Next page"], button[aria-label="Next page"]').length};
+          };
+          const pause=ms=>new Promise(r=>setTimeout(r,ms));
+          async function observe(frame,before,attempts){
+            for(let n=0;n<attempts;n++){
+              const after=await frame.evaluate(snapshot).catch(()=>null);
+              if(after){
+                const moved=(before.idx!==null&&after.idx!==null&&before.idx!==after.idx)||
+                  (before.hash!==after.hash&&/page\//.test(after.hash));
+                if(moved&&after.images&&after.images!==before.images)return true;
+              }
+              await pause(500);
+            }
+            return false;
+          }
+          result.archive_diagnostics=[];
           const sample=new Set([0,Math.floor(books.length/2),books.length-1]);
           for(const [i,book] of books.entries()){
             let stage='book_navigation';
@@ -108,20 +129,39 @@ jobs:
               assert.equal(await page.getByRole('button',{name:'قارئ الأرشيف',exact:true}).getAttribute('aria-pressed'),'true');
               result.archive_route++;
               stage='archive_actual_images';
+              await f.scrollIntoViewIfNeeded({timeout:5000});
               const frame=await (await f.elementHandle()).contentFrame();
               assert.ok(frame);
-              await frame.waitForFunction(imageReady,null,{timeout:18000});
+              let before=null;
+              for(let n=0;n<36;n++){
+                before=await frame.evaluate(snapshot).catch(()=>null);
+                if(before?.images)break;
+                await pause(500);
+              }
+              if(!before?.images){
+                result.archive_diagnostics.push({row:i+1,stage,loaded:before?.loaded??0,visible:before?.visible??0,controls:before?.controls??0});
+                throw Error('No visible decoded scan');
+              }
               result.archive_images++;
               stage='archive_actual_turn';
-              const before=await frame.evaluate(imageSignature);
-              const next=frame.locator('.BRnavCntlNxt, .BRicon.right, button[title="Next page"], button[aria-label="Next page"], button[title="Next"], button[aria-label="Next"]').filter({visible:true}).first();
-              await next.click({timeout:5000});
-              await frame.waitForFunction(old=>{
-                const now=Array.from(document.querySelectorAll('.BRpageimage, .BRpagecontainer img, .BRpageview img')).filter(x=>{
-                  const r=x.getBoundingClientRect();return x.naturalWidth>50&&r.width>20&&r.height>20&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth;
-                }).map(x=>x.currentSrc||x.src).sort().join('|');
-                return now&&now!==old;
-              },before,{timeout:12000});
+              let changed=false,actions=0;
+              for(const selector of ['button.BRicon.book_right','button.BRicon.book_left','.BRnavCntlNxt','button[title="Next page"]','button[aria-label="Next page"]','button[title="Previous page"]','button[aria-label="Previous page"]']){
+                const control=frame.locator(selector).first();
+                if(!await control.isVisible().catch(()=>false))continue;
+                try{await control.click({timeout:3000});actions++}catch{continue}
+                if(await observe(frame,before,12)){changed=true;break}
+                if(actions>=2)break;
+              }
+              if(!changed){
+                for(const key of ['ArrowLeft','ArrowRight']){
+                  try{await frame.locator('body').press(key,{timeout:3000});actions++}catch{continue}
+                  if(await observe(frame,before,12)){changed=true;break}
+                }
+              }
+              if(!changed){
+                result.archive_diagnostics.push({row:i+1,stage,loaded:before.loaded,visible:before.visible,controls:before.controls,actions,hasIndex:before.idx!==null});
+                throw Error('No independently verified page turn');
+              }
               result.archive_turn++;
             }catch{fail(i,stage);}
             // Independently test the same-origin PDF reader even if Archive fails.
