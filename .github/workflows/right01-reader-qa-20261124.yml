@@ -1,0 +1,128 @@
+name: RIGHT-01 reader QA (exact private SHA, read-only)
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/right01-reader-qa-20261124.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: right01-reader-qa
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: d7792234c513d4403adee76ef9734c8d85e4e3e6
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - name: Require reviewed immutable private SHA
+        id: pin
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "d7792234c513d4403adee76ef9734c8d85e4e3e6"
+          echo RIGHT01_READER_SHA_PASS
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run targeted reader regression
+        working-directory: source
+        run: |
+          if node --test tests/right01-reader-volume-consistency.test.mjs > "$RUNNER_TEMP/right01-reader.log" 2>&1; then
+            echo RIGHT01_READER_TEST_PASS
+          else
+            echo "::error::RIGHT01_READER_TEST_FAIL (private logs withheld)"
+            exit 1
+          fi
+      - name: Run full private foundation
+        if: always() && steps.pin.outcome == 'success'
+        working-directory: source
+        run: |
+          python -m pip install --disable-pip-version-check python-frontmatter pyyaml > /dev/null 2>&1
+          if node scripts/check_site_foundation.mjs > "$RUNNER_TEMP/right01-foundation.log" 2>&1; then
+            echo RIGHT01_FOUNDATION_PASS
+          else
+            echo "::error::RIGHT01_FOUNDATION_FAIL (private logs withheld)"
+            exit 1
+          fi
+      - name: Check Archive metadata and HTTP file availability without downloading books
+        if: always() && steps.pin.outcome == 'success'
+        working-directory: source
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const index=JSON.parse(readFileSync('content/books/index.json','utf8'));
+          const records=index.books.map(b=>JSON.parse(readFileSync(b.record,'utf8')));
+          const groups=new Map();
+          const counts={records:records.length,invalid:0,metadataFailures:0,restricted:0,missing:0,unavailable:0,headPass:0,headUnknown:0};
+          for(const record of records){
+            const match=/^https:\/\/archive\.org\/details\/([A-Za-z0-9][A-Za-z0-9._-]{0,100})$/.exec(record.archive_item_url||'');
+            if(!match){counts.invalid++;continue}
+            const item=match[1];
+            const urls=[record.archive_pdf_source_url,record.archive_cover_pdf_source_url,...(record.archive_pdf_files||[]).map(f=>f.url)].filter(Boolean);
+            if(!record.archive_pdf_source_url)counts.invalid++;
+            if(!groups.has(item))groups.set(item,new Set());
+            for(const raw of urls){
+              try{
+                const u=new URL(raw),prefix='/download/'+item+'/';
+                if(u.origin!=='https://archive.org'||u.username||u.password||u.search||u.hash||!u.pathname.startsWith(prefix))throw Error();
+                const name=decodeURIComponent(u.pathname.slice(prefix.length));
+                if(!name||name.includes('/')||name.includes('\\')||!name.toLowerCase().endsWith('.pdf'))throw Error();
+                groups.get(item).add(name);
+              }catch{counts.invalid++}
+            }
+          }
+          const yes=v=>v===true||v===1||v==='true'||v==='1';
+          async function head(url){
+            for(let i=0;i<5;i++){
+              const u=new URL(url);
+              if(u.protocol!=='https:'||!(u.hostname==='archive.org'||u.hostname.endsWith('.archive.org'))||u.username||u.password)return 'unknown';
+              const r=await fetch(u,{method:'HEAD',redirect:'manual',signal:AbortSignal.timeout(18000)});
+              if(r.status>=300&&r.status<400&&r.headers.get('location')){
+                url=new URL(r.headers.get('location'),u).href;continue;
+              }
+              if(r.ok&&/application\/pdf/i.test(r.headers.get('content-type')||'')&&Number(r.headers.get('content-length'))>0)return 'pass';
+              if([401,403,404,410,451].includes(r.status))return 'unavailable';
+              return 'unknown';
+            }
+            return 'unknown';
+          }
+          async function verify([item,files]){
+            let data;
+            try{
+              const response=await fetch('https://archive.org/metadata/'+encodeURIComponent(item),{redirect:'error',signal:AbortSignal.timeout(20000)});
+              if(!response.ok)throw Error();
+              data=await response.json();
+              if(!Array.isArray(data.files)||!data.metadata)throw Error();
+            }catch{counts.metadataFailures++;return}
+            if(yes(data.is_dark)||yes(data.metadata['access-restricted-item'])){counts.restricted+=files.size;return}
+            for(const file of files){
+              const entry=data.files.find(f=>f.name===file);
+              if(!entry||!(Number(entry.size)>0)){counts.missing++;continue}
+              if(yes(entry.private)){counts.restricted++;continue}
+              try{
+                const result=await head('https://archive.org/download/'+encodeURIComponent(item)+'/'+encodeURIComponent(file));
+                if(result==='pass')counts.headPass++;
+                else if(result==='unavailable')counts.unavailable++;
+                else counts.headUnknown++;
+              }catch{counts.headUnknown++}
+            }
+          }
+          const pending=[...groups];
+          await Promise.all(Array.from({length:3},async()=>{while(pending.length)await verify(pending.shift())}));
+          console.log('RIGHT01_ARCHIVE_AGGREGATES '+JSON.stringify({...counts,items:groups.size,uniqueFiles:[...groups.values()].reduce((n,x)=>n+x.size,0)}));
+          if(counts.records!==22||counts.invalid||counts.metadataFailures||counts.restricted||counts.missing||counts.unavailable||counts.headUnknown)process.exitCode=1;
+          NODE
+      - name: Confirm private tracked source is unchanged
+        if: always() && steps.pin.outcome == 'success'
+        working-directory: source
+        run: git diff --exit-code --quiet
