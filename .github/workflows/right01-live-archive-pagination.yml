@@ -1,0 +1,155 @@
+name: RIGHT-01 live Archive pagination (candidate only)
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/right01-live-archive-pagination.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: right01-live-archive-pagination
+  cancel-in-progress: false
+jobs:
+  browser:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.actor == 'aljamharah'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: a8d9b1ae5fafaf3588a12331a6a77e705fe6cdb3
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify exact candidate and build static public distribution
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "a8d9b1ae5fafaf3588a12331a6a77e705fe6cdb3"
+          python -m pip install --disable-pip-version-check python-frontmatter pyyaml >/dev/null 2>&1
+          if node scripts/build_public_site.mjs > "$RUNNER_TEMP/right01-live-build.log" 2>&1; then
+            echo RIGHT01_LIVE_BUILD_PASS
+          else
+            echo "::error::RIGHT01_LIVE_BUILD_FAIL (private logs withheld)"
+            exit 1
+          fi
+      - name: Install disposable browser
+        run: |
+          mkdir -p "$RUNNER_TEMP/right01-browser"
+          cd "$RUNNER_TEMP/right01-browser"
+          npm install --no-audit --no-fund --no-save --package-lock=false playwright@1.56.1 >/dev/null
+          if ! command -v google-chrome >/dev/null 2>&1; then npx playwright install chromium >/dev/null; fi
+      - name: Test real Archive frames and page changes at mobile and desktop widths
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m http.server 8765 --bind 127.0.0.1 --directory "$GITHUB_WORKSPACE/source/dist" > "$RUNNER_TEMP/right01-static.log" 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          cd "$RUNNER_TEMP/right01-browser"
+          cat > audit.mjs <<'NODE'
+          import {chromium} from 'playwright';
+          import assert from 'node:assert/strict';
+          const base='http://127.0.0.1:8765';
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          for(let i=0;i<30;i++){
+            try{if((await fetch(base+'/content/books/index.json')).ok)break}catch{}
+            await sleep(300);
+          }
+          const index=await (await fetch(base+'/content/books/index.json')).json();
+          assert.equal(index.books.length,22);
+          const books=[];
+          for(const entry of index.books){
+            assert.match(entry.record,/^content\/books\/records\/[a-z0-9-]+\.json$/);
+            books.push(await (await fetch(base+'/'+entry.record)).json());
+          }
+          const allowed=url=>url.origin===base||(url.protocol==='https:'&&(url.hostname==='archive.org'||url.hostname.endsWith('.archive.org')));
+          const stats={books:books.length,attempts:0,inline:0,rendered:0,turned:0,failed:[]};
+          let browser;
+          try{browser=await chromium.launch({channel:'chrome',headless:true})}
+          catch{browser=await chromium.launch({headless:true})}
+          async function snapshot(frame){
+            return frame.evaluate(()=>{
+              const br=[window.br,window.bookReader,window.bookreader,window.BookReader?.instance].find(x=>x&&typeof x.currentIndex==='function');
+              const images=[...document.querySelectorAll('#BookReader img, .BRpagecontainer img, img.BRpageimage')].filter(x=>{
+                const r=x.getBoundingClientRect();
+                return x.complete&&x.naturalWidth>=100&&x.naturalHeight>=100&&r.width>10&&r.height>10&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth;
+              });
+              return {idx:br?Number(br.currentIndex()):null,hash:location.hash,images:images.map(x=>x.currentSrc||x.src).sort().join('|')};
+            });
+          }
+          async function observeChange(frame,before){
+            for(let i=0;i<20;i++){
+              await sleep(500);
+              const after=await snapshot(frame);
+              const position=(before.idx!==null&&after.idx!==null&&before.idx!==after.idx)||(before.hash!==after.hash&&/page\//.test(after.hash));
+              if(position&&after.images&&after.images!==before.images)return true;
+            }
+            return false;
+          }
+          try{
+            for(const width of [390,1280]){
+              for(let i=0;i<books.length;i++){
+                stats.attempts++;
+                const book=books[i];
+                const ctx=await browser.newContext({viewport:{width,height:844},locale:'ar',serviceWorkers:'block'});
+                await ctx.route('**/*',route=>{
+                  const req=route.request(),u=new URL(req.url());
+                  if(!['GET','HEAD'].includes(req.method())||!allowed(u)||u.pathname.startsWith('/api/')||/\.pdf$/i.test(u.pathname))return route.abort();
+                  return route.continue();
+                });
+                try{
+                  const page=await ctx.newPage();
+                  await page.goto(base+'/book.html?id='+encodeURIComponent(book.id),{waitUntil:'domcontentloaded',timeout:20000});
+                  const iframe=page.locator('#bookReading .waqf-reader-frame');
+                  await iframe.waitFor({state:'visible',timeout:12000});
+                  const expected=new URL(await iframe.getAttribute('src'));
+                  assert.equal(expected.origin,'https://archive.org');
+                  assert.ok(expected.pathname.startsWith('/embed/'+book.archive_item_url.split('/').pop()+'/'));
+                  stats.inline++;
+                  const handle=await iframe.elementHandle();
+                  const frame=await handle.contentFrame();
+                  if(!frame)throw Error('frame');
+                  let before;
+                  for(let n=0;n<30;n++){
+                    try{before=await snapshot(frame);if(before.images)break}catch{}
+                    await sleep(600);
+                  }
+                  if(!before?.images)throw Error('render');
+                  stats.rendered++;
+                  let changed=false;
+                  for(const selector of ['button.BRicon.book_right','button.BRicon.book_left','button[title="Next page"]','button[aria-label="Next page"]','button[title="Previous page"]','button[aria-label="Previous page"]']){
+                    const control=frame.locator(selector).first();
+                    if(await control.isVisible().catch(()=>false)){
+                      await control.click({timeout:3000}).catch(()=>{});
+                      if(await observeChange(frame,before)){changed=true;break}
+                    }
+                  }
+                  if(!changed){
+                    for(const key of ['ArrowLeft','ArrowRight']){
+                      await frame.locator('body').press(key,{timeout:3000}).catch(()=>{});
+                      if(await observeChange(frame,before)){changed=true;break}
+                    }
+                  }
+                  if(!changed)throw Error('turn');
+                  stats.turned++;
+                }catch(error){
+                  const category=['frame','render','turn'].includes(error.message)?error.message:'setup';
+                  stats.failed.push({ordinal:i+1,width,category});
+                }finally{await ctx.close()}
+              }
+            }
+          }finally{await browser.close()}
+          console.log('RIGHT01_LIVE_BROWSER '+JSON.stringify(stats));
+          if(stats.turned!==stats.attempts)process.exitCode=1;
+          NODE
+          node audit.mjs
+      - name: Verify tracked private source remains unchanged
+        if: always()
+        working-directory: source
+        run: git diff --exit-code --quiet
