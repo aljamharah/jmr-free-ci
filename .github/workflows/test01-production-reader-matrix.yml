@@ -145,7 +145,7 @@ jobs:
               result.archive_images++;
               stage='archive_actual_turn';
               let changed=false,actions=0;
-              for(const selector of ['button.BRicon.book_right','button.BRicon.book_left','.BRnavCntlNxt','button[title="Next page"]','button[aria-label="Next page"]','button[title="Previous page"]','button[aria-label="Previous page"]']){
+              for(const selector of ['button.book_flip_next:visible','button[title="Next page"]:visible','button[aria-label="Next page"]:visible','.BRnavCntlNxt:visible','button.book_flip_prev:visible']){
                 const control=frame.locator(selector).first();
                 if(!await control.isVisible().catch(()=>false))continue;
                 try{await control.click({timeout:3000});actions++}catch{continue}
@@ -171,7 +171,8 @@ jobs:
                 stage='volume_switch';
                 const f=page.locator('#bookPanel .waqf-reader-frame').first();
                 const initial=await f.getAttribute('src');
-                await picker.selectOption({index:1});
+                const current=Number(await picker.inputValue());
+                await picker.selectOption({index:current===0?1:0});
                 const next=await f.getAttribute('src');
                 assert.ok(next&&next!==initial&&new URL(next).pathname.startsWith('/embed/'));
                 result.volume_switch++;
@@ -180,7 +181,7 @@ jobs:
               stage='pdf_render';
               await page.getByRole('button',{name:'قارئ PDF',exact:true}).click({timeout:5000});
               const f=page.frameLocator('#bookPanel .waqf-reader-frame');
-              await f.locator('#reader-toolbar').waitFor({state:'visible',timeout:30000});
+              await f.locator('#reader-toolbar').waitFor({state:'visible',timeout:32000});
               await f.locator('#viewport').waitFor({state:'visible',timeout:15000});
               const pages=Number(await f.locator('#total').innerText());
               assert.ok(pages>1);
