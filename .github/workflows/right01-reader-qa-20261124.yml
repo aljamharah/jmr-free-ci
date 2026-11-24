@@ -114,7 +114,7 @@ jobs:
           async function head(url){
             const r=await request(url,'HEAD');
             if(!r)return 'unknown';
-            if(r.ok&&/application\\/pdf/i.test(r.headers.get('content-type')||'')&&Number(r.headers.get('content-length'))>0)return 'pass';
+            if(r.ok&&/application\/pdf/i.test(r.headers.get('content-type')||'')&&Number(r.headers.get('content-length'))>0)return 'pass';
             if([401,403,404,410,451].includes(r.status))return 'unavailable';
             return 'unknown';
           }
