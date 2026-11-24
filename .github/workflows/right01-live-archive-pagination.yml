@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: a8d9b1ae5fafaf3588a12331a6a77e705fe6cdb3
+          ref: 663f49dfa3d5a666321777706792af25d8e734fe
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: source
           persist-credentials: false
@@ -30,7 +30,7 @@ jobs:
       - name: Verify exact candidate and build static public distribution
         working-directory: source
         run: |
-          test "$(git rev-parse HEAD)" = "a8d9b1ae5fafaf3588a12331a6a77e705fe6cdb3"
+          test "$(git rev-parse HEAD)" = "663f49dfa3d5a666321777706792af25d8e734fe"
           python -m pip install --disable-pip-version-check python-frontmatter pyyaml >/dev/null 2>&1
           if node scripts/build_public_site.mjs > "$RUNNER_TEMP/right01-live-build.log" 2>&1; then
             echo RIGHT01_LIVE_BUILD_PASS
@@ -75,12 +75,12 @@ jobs:
           catch{browser=await chromium.launch({headless:true})}
           async function snapshot(frame){
             return frame.evaluate(()=>{
-              const br=[window.br,window.bookReader,window.bookreader,window.BookReader?.instance].find(x=>x&&typeof x.currentIndex==='function');
+              const br=[document.querySelector('ia-bookreader')?.bookreader,window.br,window.bookReader,window.bookreader,window.BookReader?.instance].find(x=>x&&typeof x.currentIndex==='function');
               const images=[...document.querySelectorAll('#BookReader img, .BRpagecontainer img, img.BRpageimage')].filter(x=>{
                 const r=x.getBoundingClientRect();
                 return x.complete&&x.naturalWidth>=100&&x.naturalHeight>=100&&r.width>10&&r.height>10&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth;
               });
-              return {idx:br?Number(br.currentIndex()):null,hash:location.hash,images:images.map(x=>x.currentSrc||x.src).sort().join('|')};
+              return {idx:br?Number(br.currentIndex()):null,hash:location.hash,images:images.map(x=>x.currentSrc||x.src).sort().join('|'),hasInstance:!!br};
             });
           }
           async function observeChange(frame,before){
@@ -123,8 +123,8 @@ jobs:
                   if(!before?.images)throw Error('render');
                   stats.rendered++;
                   let changed=false;
-                  for(const selector of ['button.BRicon.book_right','button.BRicon.book_left','button[title="Next page"]','button[aria-label="Next page"]','button[title="Previous page"]','button[aria-label="Previous page"]']){
-                    const control=frame.locator(selector).first();
+                  for(const selector of ['.BRicon.book_flip_next','.BRicon.book_flip_prev','.BRicon.book_right','.BRicon.book_left','button[title="Next page"]','button[aria-label="Next page"]','button[title="Previous page"]','button[aria-label="Previous page"]']){
+                    const control=frame.locator(selector+':visible').first();
                     if(await control.isVisible().catch(()=>false)){
                       await control.click({timeout:3000}).catch(()=>{});
                       if(await observeChange(frame,before)){changed=true;break}
@@ -138,6 +138,7 @@ jobs:
                   }
                   if(!changed)throw Error('turn');
                   stats.turned++;
+                  console.log('RIGHT01_PAGE_TURN_PASS ordinal='+(i+1)+' width='+width);
                 }catch(error){
                   const category=['frame','render','turn'].includes(error.message)?error.message:'setup';
                   stats.failed.push({ordinal:i+1,width,category});
