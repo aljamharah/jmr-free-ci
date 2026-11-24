@@ -1,0 +1,62 @@
+name: JMR-01 pinned offline evaluator
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/jmr01-pinned-offline-evaluator.yml'
+permissions:
+  contents: read
+jobs:
+  offline:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.actor == 'aljamharah' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Read exact private test revision, only two files, no persistent credentials
+        uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: '7f09e8bfdd9ba461c96b421b297916983f962ac3'
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          persist-credentials: false
+          path: private-eval
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /scripts/jmr01_private_evaluator.mjs
+            /scripts/test_jmr01_private_evaluator.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify exact private blobs and run offline regression without logging source
+        shell: bash
+        working-directory: private-eval
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '7f09e8bfdd9ba461c96b421b297916983f962ac3'
+          test "$(git hash-object scripts/jmr01_private_evaluator.mjs)" = '6710fc42819ec0c7ea2d31cd6922a7a66d67ffa0'
+          test "$(git hash-object scripts/test_jmr01_private_evaluator.mjs)" = 'e177fc0b38d53aac88a4f9551f846fcdc074902a'
+          export CI=true
+          # Deny Node network access through a preload. Test children inherit NODE_OPTIONS.
+          guard="$(mktemp --suffix=.cjs)"
+          log="$(mktemp)"
+          trap 'rm -f "$guard" "$log"' EXIT
+          cat > "$guard" <<'NODE'
+          const block = () => { throw new Error("Offline evaluator: network forbidden"); };
+          global.fetch = block;
+          for (const id of ["node:http", "node:https"]) {
+            const m = require(id); m.request = block; m.get = block;
+          }
+          const net = require("node:net"); net.connect = block; net.createConnection = block; net.Socket.prototype.connect = block;
+          const tls = require("node:tls"); tls.connect = block;
+          NODE
+          export NODE_OPTIONS="--require=$guard"
+          if ! node --test scripts/test_jmr01_private_evaluator.mjs >"$log" 2>&1; then
+            echo "::error::Pinned offline test failed; private diagnostic output suppressed."
+            exit 1
+          fi
+          grep -Eq '^# tests 1$' "$log"
+          grep -Eq '^# pass 1$' "$log"
+          grep -Eq '^# fail 0$' "$log"
+          echo 'JMR01_PINNED_OFFLINE_PASS: one CLI suite, 21 internal mock checks, 10 CLI scenarios; zero live calls.'
+          echo 'Private source and answers are not uploaded. This is offline validation only.' >> "$GITHUB_STEP_SUMMARY"
