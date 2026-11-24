@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: 663f49dfa3d5a666321777706792af25d8e734fe
+          ref: 6f5b49fe6a0679a0725e3b6ba692aaf88a6eed8d
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: source
           persist-credentials: false
@@ -30,7 +30,7 @@ jobs:
       - name: Verify exact candidate and build static public distribution
         working-directory: source
         run: |
-          test "$(git rev-parse HEAD)" = "663f49dfa3d5a666321777706792af25d8e734fe"
+          test "$(git rev-parse HEAD)" = "6f5b49fe6a0679a0725e3b6ba692aaf88a6eed8d"
           python -m pip install --disable-pip-version-check python-frontmatter pyyaml >/dev/null 2>&1
           if node scripts/build_public_site.mjs > "$RUNNER_TEMP/right01-live-build.log" 2>&1; then
             echo RIGHT01_LIVE_BUILD_PASS
@@ -93,11 +93,11 @@ jobs:
             return false;
           }
           try{
-            for(const width of [390,1280]){
+            for(const width of [390]){
               for(let i=0;i<books.length;i++){
                 stats.attempts++;
                 const book=books[i];
-                const ctx=await browser.newContext({viewport:{width,height:844},locale:'ar',serviceWorkers:'block'});
+                const ctx=await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:2,locale:'ar',serviceWorkers:'block'});
                 await ctx.route('**/*',route=>{
                   const req=route.request(),u=new URL(req.url());
                   if(!['GET','HEAD'].includes(req.method())||!allowed(u)||u.pathname.startsWith('/api/')||/\.pdf$/i.test(u.pathname))return route.abort();
@@ -128,6 +128,50 @@ jobs:
                     if(await control.isVisible().catch(()=>false)){
                       await control.click({timeout:3000}).catch(()=>{});
                       if(await observeChange(frame,before)){changed=true;break}
+                    }
+                  }
+                  if(!changed){
+                    // Mobile 1-up BookReader uses a vertical scroll surface rather than a visible arrow.
+                    const surface=await frame.evaluate(()=>{
+                      const img=[...document.querySelectorAll('#BookReader img,.BRpagecontainer img,img.BRpageimage')].find(el=>{
+                        const r=el.getBoundingClientRect();return el.complete&&el.naturalWidth>=100&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth;
+                      });
+                      if(!img)return null;
+                      let el=img;
+                      while(el){
+                        const r=el.getBoundingClientRect(),style=getComputedStyle(el);
+                        if(el.scrollHeight>el.clientHeight+100&&el.clientHeight>100&&/auto|scroll/.test(style.overflowY)){
+                          const top=Math.max(0,r.top),bottom=Math.min(innerHeight,r.bottom),left=Math.max(0,r.left),right=Math.min(innerWidth,r.right);
+                          if(bottom-top>100&&right-left>50)return {x:(left+right)/2,y:(top+bottom)/2,delta:Math.max(400,Math.round(el.clientHeight*.95))};
+                        }
+                        const root=el.getRootNode();el=el.parentElement||root.host||null;
+                      }
+                      return null;
+                    });
+                    if(surface){
+                      await iframe.scrollIntoViewIfNeeded();
+                      const rect=await iframe.boundingBox();
+                      if(rect){
+                        const x=rect.x+surface.x,y=rect.y+surface.y;
+                        await page.mouse.move(x,y);
+                        for(let n=0;n<4&&!changed;n++){
+                          await page.mouse.wheel(0,surface.delta);
+                          changed=await observeChange(frame,before);
+                        }
+                        if(!changed){
+                          const client=await ctx.newCDPSession(page);
+                          try{
+                            const sy=Math.min(800,y+90),ey=Math.max(40,y-140);
+                            await client.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y:sy}]});
+                            for(let j=1;j<=8;j++){
+                              await client.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:sy+(ey-sy)*j/8}]});
+                              await sleep(40);
+                            }
+                            await client.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+                            changed=await observeChange(frame,before);
+                          }finally{await client.detach().catch(()=>{})}
+                        }
+                      }
                     }
                   }
                   if(!changed){

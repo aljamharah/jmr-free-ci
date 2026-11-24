@@ -105,7 +105,7 @@ jobs:
           const base='https://aljamharah.pages.dev',shard=Number(process.env.SHARD);
           const read=async path=>{const r=await fetch(base+path,{signal:AbortSignal.timeout(15000)});assert.ok(r.ok);return r};
           const viewer=await (await read('/book-pdf-viewer.html')).text();
-          assert.ok(viewer.includes('fallback-retry')&&viewer.includes('PDF_OPEN_TIMEOUT_MS=25000'),'deployed PDF release marker absent');
+          assert.ok(viewer.includes('fallback-retry')&&viewer.includes('PDF_OPEN_TIMEOUT_MS=25000')&&viewer.includes('disableAutoFetch:readableSource!==source'),'deployed PDF release marker absent');
           const index=await (await read('/content/books/index.json')).json();
           assert.equal(index.books.length,22);
           const jobs=[];
@@ -132,7 +132,7 @@ jobs:
           async function run(job){
             const {entry,ordinal,width}=job;
             const result={ordinal,width,category:'setup'};
-            let ctx,client,bytes=0,relayRequests=0,budget=false,relaySuccess=0;
+            let ctx,client,bytes=0,relayRequests=0,budget=false,relaySuccess=0;const relayStatuses={};
             try{
               assert.match(entry.id,/^[a-z0-9-]+$/);
               ctx=await browser.newContext({viewport:{width,height:844},locale:'ar',serviceWorkers:'block'});
@@ -154,7 +154,7 @@ jobs:
                 if(u.origin==='https://cdnjs.cloudflare.com'&&u.pathname.startsWith('/ajax/libs/pdf.js/4.10.38/'))return route.continue();
                 return route.abort();
               });
-              page.on('response',r=>{if(r.url().startsWith(base+'/api/books/pdf/'+entry.id+'?')&&[200,206].includes(r.status()))relaySuccess++});
+              page.on('response',r=>{const u=new URL(r.url());if(u.origin===base&&u.pathname.replace(/\/$/,'')==='/api/books/pdf/'+entry.id){relayStatuses[r.status()]=(relayStatuses[r.status()]||0)+1;if([200,206].includes(r.status()))relaySuccess++}});
               await page.goto(base+'/book.html?id='+encodeURIComponent(entry.id),{waitUntil:'domcontentloaded',timeout:15000});
               await page.getByRole('button',{name:'قارئ PDF',exact:true}).click({timeout:12000});
               const iframe=page.locator('#bookReading .waqf-reader-frame');
@@ -173,11 +173,12 @@ jobs:
               await frame.locator('#previous').click({timeout:4000});
               await ready(frame,1,15000);
               assert.equal((await fingerprint(frame)).hash,first.hash);
+              result.category='relay-observation';
               assert.ok(relaySuccess>0);
               result.category='pass';
             }catch{if(budget)result.category='network-budget';else if(relayRequests>64)result.category='request-budget'}
             finally{if(ctx)await ctx.close().catch(()=>{})}
-            result.relayResponses=relaySuccess;results.push(result);
+            result.relayResponses=relaySuccess;result.relayRequests=relayRequests;result.relayStatuses=relayStatuses;results.push(result);
             console.log('RIGHT01_PDF_CASE '+JSON.stringify(result));
           }
           try{for(let i=shard;i<jobs.length;i+=4)await run(jobs[i])}
