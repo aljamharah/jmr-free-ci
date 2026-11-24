@@ -1,0 +1,84 @@
+name: TEST-01 bounded production PDF transport diagnosis
+on:
+  pull_request:
+    branches: [main]
+    paths: [".github/workflows/test01-pdf-range-diagnostic-20261124.yml"]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'test/test01-pdf-range-diagnostic-20261124'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify PDF signatures and byte-range behavior on every published book
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          const base='https://aljamharah.pages.dev';
+          async function json(path){
+            const u=new URL(path,base);
+            assert.equal(u.origin,base);
+            const r=await fetch(u,{redirect:'error',signal:AbortSignal.timeout(15000)});
+            assert.equal(r.status,200);
+            return r.json();
+          }
+          const index=(await json('/content/books/index.json')).books;
+          assert.equal(index.length,22);
+          const pending=index.map((b,i)=>({b,row:i+1}));
+          const results=[];
+          async function request(raw,first,last,direct){
+            let current=new URL(raw);
+            for(let i=0;i<=5;i++){
+              const safe=direct?current.protocol==='https:'&&(current.hostname==='archive.org'||current.hostname.endsWith('.archive.org')):current.origin===base;
+              assert.ok(safe&&!current.username&&!current.password);
+              const r=await fetch(current,{method:'GET',headers:{Range:'bytes='+first+'-'+last,'Accept-Encoding':'identity'},redirect:'manual',signal:AbortSignal.timeout(22000)});
+              if([301,302,303,307,308].includes(r.status)){
+                const loc=r.headers.get('location');
+                if(r.body)await r.body.cancel().catch(()=>{});
+                assert.ok(loc);
+                current=new URL(loc,current);continue;
+              }
+              const result={status:r.status,mime:(r.headers.get('content-type')||'').split(';')[0],
+                range:!!r.headers.get('content-range'),acceptRanges:r.headers.get('accept-ranges')==='bytes',signature:false,rangeValid:false};
+              const cr=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(r.headers.get('content-range')||'');
+              if(cr)result.rangeValid=Number(cr[1])===first&&Number(cr[2])===last&&Number(cr[3])>last;
+              if(r.body){
+                const reader=r.body.getReader();
+                try{
+                  if(r.status===206||r.status===200){
+                    const {value}=await reader.read();
+                    if(first===0&&value)result.signature=new TextDecoder().decode(value.subarray(0,1024)).includes('%PDF-');
+                  }
+                }finally{await reader.cancel().catch(()=>{})}
+              }
+              return result;
+            }
+            return {status:0};
+          }
+          async function safeRequest(...args){
+            try{return await request(...args)}catch(e){return {status:0,category:e.name}}
+          }
+          async function verify({b,row}){
+            assert.match(b.record,/^content\/books\/records\/[a-z0-9-]+\.json$/);
+            const record=await json('/'+b.record);
+            const src=new URL(record.archive_pdf_source_url);
+            assert.equal(src.origin,'https://archive.org');
+            const name=decodeURIComponent(src.pathname.split('/').pop());
+            const proxy=base+'/api/books/pdf/'+encodeURIComponent(b.id)+'?file='+encodeURIComponent(name);
+            const first=await safeRequest(proxy,0,1023,false);
+            // Compare the source only when the relay cannot prove the requested bytes.
+            const direct=first.status!==206||!first.signature||!first.rangeValid?await safeRequest(src.href,0,1023,true):null;
+            const second=first.status===206&&first.signature?await safeRequest(proxy,1024,2047,false):null;
+            const ok=first.status===206&&first.rangeValid&&first.signature&&first.mime==='application/pdf'&&second?.status===206&&second.rangeValid;
+            const result={row,id:b.id,ok,first,second,direct};
+            results.push(result);console.log('TEST01_PDF_DIAG '+JSON.stringify(result));
+          }
+          await Promise.all(Array.from({length:3},async()=>{while(pending.length)await verify(pending.shift())}));
+          console.log('TEST01_PDF_TRANSPORT_SUMMARY '+JSON.stringify({records:results.length,passed:results.filter(r=>r.ok).length,failed:results.filter(r=>!r.ok).map(r=>r.row)}));
+          if(results.length!==22||results.some(r=>!r.ok))process.exitCode=1;
+          JS
