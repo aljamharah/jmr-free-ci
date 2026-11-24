@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: aljamharah/aljamharah
-          ref: d7792234c513d4403adee76ef9734c8d85e4e3e6
+          ref: a8d9b1ae5fafaf3588a12331a6a77e705fe6cdb3
           token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
           path: source
           persist-credentials: false
@@ -25,7 +25,7 @@ jobs:
         id: pin
         working-directory: source
         run: |
-          test "$(git rev-parse HEAD)" = "d7792234c513d4403adee76ef9734c8d85e4e3e6"
+          test "$(git rev-parse HEAD)" = "a8d9b1ae5fafaf3588a12331a6a77e705fe6cdb3"
           echo RIGHT01_READER_SHA_PASS
       - uses: actions/setup-node@v4
         with:
@@ -140,6 +140,10 @@ jobs:
               return 'unknown';
             }finally{await reader.cancel().catch(()=>{});}
           }
+          const unresolved=[];
+          const ordinals=new Map();
+          let ordinal=0;
+          for(const [item,files] of groups)for(const file of files)ordinals.set(item+'/'+file,++ordinal);
           async function verify([item,files]){
             let data;
             try{
@@ -158,15 +162,20 @@ jobs:
               try{result=await head(url)}catch{}
               if(result==='pass'){counts.headPass++;continue}
               if(result==='unavailable'){counts.unavailable++;continue}
-              try{result=await rangeProbe(url)}catch{}
+              for(let attempt=0;attempt<2;attempt++){
+                try{result=await rangeProbe(url)}catch{}
+                if(result!=='unknown')break;
+                if(attempt===0)await new Promise(resolve=>setTimeout(resolve,1500));
+              }
               if(result==='pass')counts.rangePass++;
               else if(result==='unavailable')counts.unavailable++;
-              else counts.headUnknown++;
+              else {counts.headUnknown++;unresolved.push(ordinals.get(item+'/'+file));}
             }
           }
           const pending=[...groups];
           await Promise.all(Array.from({length:3},async()=>{while(pending.length)await verify(pending.shift())}));
           console.log('RIGHT01_ARCHIVE_AGGREGATES '+JSON.stringify({...counts,items:groups.size,uniqueFiles:[...groups.values()].reduce((n,x)=>n+x.size,0)}));
+          console.log('RIGHT01_UNRESOLVED_FILE_ORDINALS '+JSON.stringify(unresolved.sort((a,b)=>a-b)));
           if(counts.records!==22||counts.invalid||counts.metadataFailures||counts.restricted||counts.missing||counts.unavailable||counts.headUnknown)process.exitCode=1;
           NODE
       - name: Confirm private tracked source is unchanged
