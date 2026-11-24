@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
     paths: [".github/workflows/j06-j02-live-public-contract-20261117.yml"]
+  pull_request:
+    branches: [main]
+    paths: [".github/workflows/j06-j02-live-public-contract-20261117.yml"]
   workflow_dispatch:
   schedule:
     - cron: "29 7 * * 2"
@@ -10,7 +13,7 @@ permissions:
   contents: read
 jobs:
   live-contract:
-    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main'
+    if: github.repository == 'aljamharah/jmr-free-ci' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'test/test01-canonical-arabic-archive-filenames'))
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -101,11 +104,16 @@ jobs:
                 'Archive embed is not paired with the original item');
               for(const source of remotePdfs){
                 const u=new URL(source);
-                check(u.protocol==='https:'&&u.hostname==='archive.org'&&
-                  u.pathname.startsWith('/download/'+match[1]+'/')&&
-                  /\/[A-Za-z0-9][A-Za-z0-9._-]{0,160}\.pdf$/.test(u.pathname)&&
+                const prefix='https://archive.org/download/'+match[1]+'/';
+                const segment=source.startsWith(prefix)?source.slice(prefix.length):'';
+                let filename='';
+                try{filename=decodeURIComponent(segment)}catch{}
+                check(u.origin==='https://archive.org'&&source.startsWith(prefix)&&
+                  filename.length<=180&&!filename.startsWith('.')&&!filename.includes('..')&&
+                  /^[\p{L}\p{M}\p{N} .()_-]+\.pdf$/u.test(filename)&&
+                  encodeURIComponent(filename)===segment&&
                   !u.username&&!u.password&&!u.search&&!u.hash,
-                  'Archive PDF source URL is not same-item HTTPS');
+                  'Archive PDF source URL is not canonical same-item HTTPS: '+book.id);
               }
             }
           }
