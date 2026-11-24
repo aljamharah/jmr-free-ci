@@ -1,0 +1,165 @@
+name: TEST-01 harakat exact-source and live visual qualification
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/test01-harakat-qualification-20261124.yml"]
+permissions:
+  contents: read
+jobs:
+  private-source:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.actor == 'aljamharah'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aljamharah/aljamharah
+          ref: 84a250db2b54e7a51e67aa82b8d72ea0619a1ded
+          token: ${{ secrets.JMR_PRIVATE_REPO_READ_TOKEN }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify exact candidate
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "84a250db2b54e7a51e67aa82b8d72ea0619a1ded"
+          echo TEST01_EXACT_SHA_PASS
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test language and font regression (private output withheld)
+        working-directory: source
+        run: |
+          if node --test tests/poem-red-diacritics-runtime.test.mjs tests/poem-red-harakat-mark-vs-dots.test.mjs tests/poem-red-diacritics-no-heading.test.mjs > "$RUNNER_TEMP/harakat-target.log" 2>&1; then
+            echo TEST01_HARAKAT_TARGET_PASS
+            grep -E '^# (tests|pass|fail) [0-9]+$' "$RUNNER_TEMP/harakat-target.log" || true
+          else
+            echo "::error::TEST01_HARAKAT_TARGET_FAIL"
+            grep -E '^# (tests|pass|fail) [0-9]+$' "$RUNNER_TEMP/harakat-target.log" || true
+            exit 1
+          fi
+      - name: Full foundation and production build
+        working-directory: source
+        run: |
+          python -m pip install --disable-pip-version-check python-frontmatter pyyaml >/dev/null 2>&1
+          if node scripts/check_site_foundation.mjs > "$RUNNER_TEMP/harakat-foundation.log" 2>&1; then
+            echo TEST01_FOUNDATION_PASS
+          else
+            echo "::error::TEST01_FOUNDATION_FAIL"
+            node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const log=readFileSync(process.env.RUNNER_TEMP+'/harakat-foundation.log','utf8');
+          for(const label of ['Internal page/asset references','Sanitized deploy-only dist and draft privacy','Unified header and functional search navigation','Lexicon integrity','Lexicon fast search','Quran corpus integrity','JMR API behavior and input guards','JMR failure paths, free-tier quota and rate limits','JMR runtime regression tests','Node unit tests']){
+            if(log.includes('FAILED: '+label+' ('))console.log('TEST01_FAILED_SUITE='+label);
+          }
+          NODE
+            exit 1
+          fi
+          if node scripts/build_public_site.mjs > "$RUNNER_TEMP/harakat-build.log" 2>&1; then
+            echo TEST01_BUILD_PASS
+          else
+            echo "::error::TEST01_BUILD_FAIL"
+            exit 1
+          fi
+      - name: No source changes
+        working-directory: source
+        run: git diff --exit-code --quiet
+  visual:
+    if: github.repository == 'aljamharah/jmr-free-ci' && github.ref == 'refs/heads/main' && github.actor == 'aljamharah'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [desktop, iphone-webkit, android-chromium]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install disposable browser and PNG tooling
+        env:
+          DEVICE: ${{ matrix.device }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/harakat-visual"
+          cd "$RUNNER_TEMP/harakat-visual"
+          npm install --no-audit --no-fund --no-save --package-lock=false playwright@1.56.1 pngjs@7.0.0 >/dev/null
+          if [ "$DEVICE" = iphone-webkit ]; then npx playwright install --with-deps webkit >/dev/null
+          else npx playwright install --with-deps chromium >/dev/null; fi
+      - name: Check rendered red vowel pixels and non-red letter components
+        env:
+          DEVICE: ${{ matrix.device }}
+        run: |
+          cd "$RUNNER_TEMP/harakat-visual"
+          cat > visual.mjs <<'JS'
+          import { chromium, webkit, devices } from 'playwright';
+          import assert from 'node:assert/strict';
+          import pngjs from 'pngjs';
+          const {PNG}=pngjs;
+          const BASE='https://aljamharah.pages.dev';
+          const fontPath='/gh/aliftype/amiri@d3d0c5cb6fe7196cb4a58608fc5c8ecd2e6e80fa/fonts/AmiriQuranColored.ttf';
+          const r=await fetch(BASE+'/content/poems.json',{redirect:'error',signal:AbortSignal.timeout(18000)});
+          assert.equal(r.status,200);
+          const poem=(await r.json()).poems.find(p=>p.publication_status==='published'&&p.text_status==='local_text'&&typeof p.body==='string'&&/[\u064B-\u0652]/.test(p.body));
+          assert.ok(poem&&/^[a-zA-Z0-9_-]+$/.test(poem.slug));
+          const mode=process.env.DEVICE,engine=mode==='iphone-webkit'?webkit:chromium;
+          const browser=await engine.launch();
+          try{
+            const ctx=await browser.newContext({
+              ...(mode==='iphone-webkit'?devices['iPhone 13']:mode==='android-chromium'?devices['Pixel 7']:{viewport:{width:1280,height:900}}),
+              locale:'ar',serviceWorkers:'block',deviceScaleFactor:1
+            });
+            await ctx.route('**/*',route=>{
+              const req=route.request(),u=new URL(req.url());
+              const allowed=req.method()==='GET'&&(u.origin===BASE&&!u.pathname.startsWith('/api/')||
+                u.origin==='https://cdn.jsdelivr.net'&&u.pathname===fontPath);
+              return allowed?route.continue():route.abort();
+            });
+            const page=await ctx.newPage();
+            const res=await page.goto(BASE+'/poem.html?slug='+encodeURIComponent(poem.slug),{waitUntil:'domcontentloaded',timeout:25000});
+            assert.equal(res?.status(),200);
+            const verse=page.locator('#poemVerses .verse-line').first();
+            await verse.waitFor({state:'visible',timeout:20000});
+            await page.waitForFunction(()=>document.documentElement.classList.contains('jamharah-correct-harakat'),null,{timeout:25000});
+            assert.ok(await verse.evaluate(e=>getComputedStyle(e).fontFamily.includes('JamharahCorrectHarakat')));
+            assert.ok(await verse.evaluate(e=>document.fonts.check('40px JamharahCorrectHarakat')));
+            // Test a temporary in-browser fixture using the real deployed verse CSS.
+            // Never modify server content or store screenshots of actual poems.
+            await page.evaluate(()=>{
+              const el=document.createElement('div');el.id='test01-visual';
+              el.className='poem-verses';
+              Object.assign(el.style,{position:'fixed',inset:'0 auto auto 0',width:'min(340px,100vw)',zIndex:'2147483647',background:'#fff',padding:'12px',color:'#111',pointerEvents:'none'});
+              document.body.appendChild(el);
+              const s=document.createElement('div');s.className='verse-line';s.id='test01-glyph';
+              Object.assign(s.style,{fontSize:'46px',lineHeight:'2',color:'#111',background:'#fff',textAlign:'center',whiteSpace:'nowrap'});
+              el.appendChild(s);
+            });
+            const glyph=page.locator('#test01-glyph');
+            async function redPixels(value){
+              await glyph.evaluate((e,v)=>e.textContent=v,value);
+              const img=PNG.sync.read(await glyph.screenshot({animations:'disabled'}));
+              let red=0,ink=0;
+              for(let i=0;i<img.data.length;i+=4){
+                const [r,g,b,a]=img.data.subarray(i,i+4);
+                if(a>200&&r>100&&r-g>45&&r-b>35)red++;
+                if(a>200&&r<100&&g<100&&b<100)ink++;
+              }
+              return {red,ink};
+            }
+            const report={device:mode,plain:[],marked:[]};
+            for(const s of ['ب ت ث','أ إ ؤ ئ','آ ن ي','ا\u0654 ا\u0655']){
+              const p=await redPixels(s);
+              report.plain.push(p);
+              assert.ok(p.ink>10&&p.red===0,'Non-vowel components must not be red');
+            }
+            for(const s of ['بَ تُ ثِ','نْ يّ أً']){
+              const p=await redPixels(s);
+              report.marked.push(p);
+              assert.ok(p.ink>10&&p.red>5,'True vowel marks must render red');
+            }
+            console.log('TEST01_HARAKAT_VISUAL_PASS '+JSON.stringify(report));
+          }finally{await browser.close();}
+          JS
+          node visual.mjs
