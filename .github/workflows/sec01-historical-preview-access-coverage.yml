@@ -40,7 +40,8 @@ jobs:
           assert.match(account||'',/^[a-f0-9]{32}$/i,'Missing account configuration');
           assert.ok(token?.length>=12,'Missing existing Pages API read credential');
           const projects=['aljamharah','aljamharah-staging'],environments=['production','preview'];
-          const tasks=new Map(),summaries={},seenIDs=new Set();
+          const tasks=new Map(),summaries={},seenIDs=new Set(),branchCandidates=new Map();
+          let previewBranchMissing=0,previewBranchInvalid=0;
           let configuredCustomDomains=0;
           const api='https://api.cloudflare.com/client/v4/accounts/'+account+'/pages/projects/';
           async function getCloudflare(path){
@@ -115,6 +116,19 @@ jobs:
                   if(legacy)stat.legacy_raw_root++;
                   addTarget(primary.origin,legacy?'/database/schema.sql':'/',project,'deployment');
                   stat.checked_deployment_url++;
+                  // Documented Cloudflare Pages branch normalization, not proof an alias exists.
+                  // Only derive candidates from deployment metadata, never arbitrary names.
+                  if(env==='preview'){
+                    const branch=d.deployment_trigger?.metadata?.branch;
+                    if(typeof branch!=='string'||!branch)previewBranchMissing++;
+                    else {
+                      const label=branch.toLowerCase().replace(/[^a-z0-9]/g,'-');
+                      const candidate=validateOrigin('https://'+label+'.'+project+'.pages.dev',project);
+                      if(!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)||
+                         candidate?.kind!=='preview_host')previewBranchInvalid++;
+                      else branchCandidates.set(candidate.origin+'|/',{origin:candidate.origin,path:'/',project,type:'derived'});
+                    }
+                  }
                   if(d.aliases==null)stat.alias_fields_not_reported++;
                   else{
                     if(!Array.isArray(d.aliases))throw Error('Invalid alias list');
@@ -146,7 +160,10 @@ jobs:
                 (u.origin===origin&&u.pathname.startsWith('/cdn-cgi/access/')));
             }catch{return false}
           }
-          const work=[...tasks.values()];
+          const reportedWork=[...tasks.values()];
+          const derivedWork=[...branchCandidates.entries()].filter(([k])=>!tasks.has(k)).map(([,v])=>v);
+          const derivedMetrics={access_login:0,access_denied:0,public_200:0,unknown_redirect:0,other_status:0,network_error:0};
+          const work=[...reportedWork,...derivedWork];
           async function runTask(t){
             let classification='network_error';
             try{
@@ -162,6 +179,7 @@ jobs:
               else classification='other_status';
               await r.body?.cancel().catch(()=>{});
             }catch{}
+            if(t.type==='derived'){derivedMetrics[classification]++;return;}
             metrics[classification]++;
             if(!outcomes[t.project])outcomes[t.project]={verified:0,unverified:0};
             // Generic HTTP 401/403 might be WAF/origin denial, not proof of Access.
@@ -194,7 +212,13 @@ jobs:
           const unknown_hosts=Object.values(summaries).reduce((n,x)=>n+x.unknown_hosts,0);
           const report={test:'SEC01 anonymous historical Pages Access coverage',
             read_only:true,listed_deployments:seenIDs.size,
-            unique_checked_routes:work.length,
+            unique_checked_routes:reportedWork.length,
+            derived_branch_candidates:branchCandidates.size,
+            derived_additional_routes:derivedWork.length,
+            derived_protection_results:derivedMetrics,
+            preview_branch_metadata_missing:previewBranchMissing,
+            preview_branch_label_invalid:previewBranchInvalid,
+            derived_candidates_all_access_login:derivedMetrics.access_login===derivedWork.length&&previewBranchMissing===0&&previewBranchInvalid===0,
             total_checked_deployment_urls:metrics.verified_deployment_urls,
             total_checked_reported_alias_routes:metrics.verified_alias_routes,
             unreported_alias_lists,unknown_hosts,configured_custom_domains:configuredCustomDomains,
@@ -203,7 +227,7 @@ jobs:
             canonical_production_not_200:production_nonpublic,
             all_reported_urls_protected:metrics.public_200===0&&metrics.unknown_redirect===0&&
               metrics.other_status===0&&metrics.network_error===0&&unknown_hosts===0&&
-              metrics.access_login===work.length&&metrics.access_denied===0&&configuredCustomDomains===0,
+              metrics.access_login===reportedWork.length&&metrics.access_denied===0&&configuredCustomDomains===0,
             all_alias_urls_known:unreported_alias_lists===0,
             response_bodies_logged:false,hosts_ids_secrets_logged:false,
             cloudflare_mutations:0,ai_model_calls:0,
@@ -216,16 +240,20 @@ jobs:
             const lines=[
               '## SEC-01 — Historical Pages Access coverage',
               '',
-              '**Scope: API-reported deployment URLs and alias routes only.**',
+              '**Scope: API-reported URLs plus separately classified metadata-derived branch candidates.**',
               'A successful check does NOT prove that omitted historical aliases never existed,',
               'nor does it establish whether material was accessed before Access was enabled.',
               '',
               '| Safe aggregate metric | Result |',
               '| --- | ---: |',
-              '| Checked unique routes | '+report.unique_checked_routes+' |',
+              '| Checked API-reported unique routes | '+report.unique_checked_routes+' |',
+              '| Additional metadata-derived branch candidates checked | '+derivedWork.length+' |',
+              '| Derived candidates with Access login | '+derivedMetrics.access_login+' |',
+              '| Derived candidates unverified | '+(derivedWork.length-derivedMetrics.access_login)+' |',
+              '| Preview records with missing/invalid branch metadata | '+(previewBranchMissing+previewBranchInvalid)+' |',
               '| Verified Access login redirects | '+metrics.access_login+' |',
               '| Public HTTP 200 on protected preview routes | '+metrics.public_200+' |',
-              '| Unverified routes (including network errors) | '+(work.length-metrics.access_login)+' |',
+              '| Unverified routes (including network errors) | '+(reportedWork.length-metrics.access_login)+' |',
               '| Deployment entries without an alias list | '+report.unreported_alias_lists+' |',
               '| Unknown/unrecognized hosts | '+report.unknown_hosts+' |',
               '| Configured Pages custom domains | '+report.configured_custom_domains+' |',
@@ -248,9 +276,11 @@ jobs:
           if(configuredCustomDomains>0)
             console.log('::error title=Unverified custom Pages domains::'+configuredCustomDomains+
               ' custom domains require an independent Access audit.');
-          if(!report.all_reported_urls_protected||production_public!==2)
+          if(!report.derived_candidates_all_access_login)
+            console.log('::error title=Derived branch coverage incomplete::Some documented branch candidates lack verified Access redirects or usable metadata; investigate without printing names.');
+          if(!report.all_reported_urls_protected||production_public!==2||!report.derived_candidates_all_access_login)
             throw Error('Historical Access coverage or canonical production safety cannot be accepted');
-          console.log('PASS: every API-reported hashed deployment and alias route tested is anonymous-blocked; canonical production is public. Unknown aliases remain unverified.');
+          console.log('PASS: API-reported routes and metadata-derived branch candidates returned Access login; canonical production is public. Unknown historical aliases remain unverified.');
           } catch (e) {
             if (e?.message === 'Inventory changed while reading Pages listing') {
               console.log('::warning title=Cloudflare inventory drift::Deployment list changed during pagination; rerunning a fresh complete inventory.');
